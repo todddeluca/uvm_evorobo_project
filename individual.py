@@ -11,7 +11,7 @@ from robot import Robot
 class Individual:
     
     def __init__(self, id_):
-        self.genome = np.random.random((5,8)) * 2 - 1
+        self.genome = np.random.random((9,8)) * 2 - 1
         self.fitness = 0
         self.id_ = id_
         

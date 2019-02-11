@@ -83,9 +83,16 @@ class Robot:
         t1 = sim.send_touch_sensor(body_id=o6)
         t2 = sim.send_touch_sensor(body_id=o7)
         t3 = sim.send_touch_sensor(body_id=o8)
+        
         p4 = sim.send_position_sensor(body_id=o0)
         l5 = sim.send_light_sensor(body_id=o0)
-        return [t0, t1, t2, t3, l5], p4, l5
+        
+        # upper limb touch sensors
+        t6 = sim.send_touch_sensor(body_id=o1)
+        t7 = sim.send_touch_sensor(body_id=o2)
+        t8 = sim.send_touch_sensor(body_id=o3)
+        t9 = sim.send_touch_sensor(body_id=o4)
+        return [t0, t1, t2, t3, l5, t6, t7, t8, t9], p4, l5
 
 
     def send_neurons(self, sim, sensors, joints):

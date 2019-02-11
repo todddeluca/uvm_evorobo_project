@@ -53,10 +53,8 @@ class Population:
         Return the fittest of two randomly selected distinct individuals from the population
         '''
         i, j = np.random.choice(self.pop_size, 2, replace=False)
-        if self.p[i].fitness >= self.p[j].fitness:
-            return self.p[i]
-        else:
-            return self.p[j]
+        idx = i if self.p[i].fitness >= self.p[j].fitness else j
+        return self.p[idx]
         
     
     def collect_children_from(self, other):
