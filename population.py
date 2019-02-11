@@ -1,26 +1,66 @@
+
 from individual import Individual
+import copy
+import numpy as np
+
 
 class Population:
     
-    def __init__(self, popSize=1):
-        self.p = {}
-        for i in range(popSize):
-            self.p[i] = Individual(id_=i)
+    def __init__(self, pop_size=1):
+        self.pop_size = pop_size
+        self.p = []
+        
+    def initialize(self):
+        self.p = []
+        for i in range(self.pop_size):
+            self.p.append(Individual(id_=i))
         
     def __repr__(self):
-        return ', '.join([str(self.p[i]) for i in self.p])
+        return ', '.join([str(indiv) for indiv in self.p])
             
-    def evaluate(self, play_blind=True):
-        for i in self.p:
-            self.p[i].start_evaluation(play_blind=play_blind)
+    def evaluate(self, play_blind=True, play_paused=False):
+        for indiv in self.p:
+            indiv.start_evaluation(play_blind=play_blind, play_paused=play_paused)
             
-        for i in self.p:
-            self.p[i].compute_fitness()
+        for indiv in self.p:
+            indiv.compute_fitness()
             
     def mutate(self):
-        for i in self.p:
-            self.p[i].mutate()
+        for indiv in self.p:
+            indiv.mutate()
             
+    def fill_from(self, other):
+        self.copy_best_from(other)
+        self.collect_children_from(other)
+        
+    def copy_best_from(self, other):
+        '''
+        copy best individual from other into the population
+        '''
+        best_i = np.argmax([indiv.fitness for indiv in other.p])
+        self.p.append(copy.deepcopy(other.p[best_i]))
+            
+    def winner_of_tournament_selection(self):
+        '''
+        Return the fittest of two randomly selected distinct individuals from the population
+        '''
+        i, j = np.random.choice(self.pop_size, 2, replace=False)
+        if self.p[i].fitness >= self.p[j].fitness:
+            return self.p[i]
+        else:
+            return self.p[j]
+        
+    
+    def collect_children_from(self, other):
+        '''
+        fill remaining population slots from randomly selected and mutated individuals from other
+        '''
+        for i in range(len(self.p), self.pop_size):
+            winner = other.winner_of_tournament_selection()
+            child = copy.deepcopy(winner)
+            child.mutate()
+            self.p.append(child)
+        
     def replace_with(self, other):
         for i in self.p:
             if self.p[i].fitness < other.p[i].fitness:

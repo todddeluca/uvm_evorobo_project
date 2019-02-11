@@ -14,8 +14,8 @@ class Individual:
         self.fitness = 0
         self.id_ = id_
         
-    def start_evaluation(self, play_blind=True):
-        self.sim = pyrosim.Simulator(play_paused=True, eval_time=400, play_blind=play_blind)
+    def start_evaluation(self, play_blind=True, play_paused=False):
+        self.sim = pyrosim.Simulator(play_paused=play_paused, eval_time=800, play_blind=play_blind)
         robot = Robot(self.sim, weights=self.genome)
         self.position_sensor_id = robot.p4
         self.sim.start()

@@ -13,7 +13,7 @@ parents = Population(10)
 parents.evaluate(play_blind=True)
 print(f'0: {parents}')
 
-for i in range(1, 200):
+for i in range(1, 2000):
     children = copy.deepcopy(parents)
     children.mutate()
     children.evaluate()
