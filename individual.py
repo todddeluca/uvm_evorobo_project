@@ -4,27 +4,30 @@ import matplotlib.pyplot as plt
 import random
 import numpy as np
 
+import constants as c
 from robot import Robot
 
 
 class Individual:
     
     def __init__(self, id_):
-        self.genome = np.random.random((4,8)) * 2 - 1
+        self.genome = np.random.random((5,8)) * 2 - 1
         self.fitness = 0
         self.id_ = id_
         
-    def start_evaluation(self, play_blind=True, play_paused=False):
-        self.sim = pyrosim.Simulator(play_paused=play_paused, eval_time=800, play_blind=play_blind)
+    def start_evaluation(self, env, play_blind=True, play_paused=False):
+        self.sim = pyrosim.Simulator(play_paused=play_paused, eval_time=c.eval_time, play_blind=play_blind)
+        env.send_to(self.sim)
         robot = Robot(self.sim, weights=self.genome)
         self.position_sensor_id = robot.p4
+        self.distance_sensor_id = robot.l5 # distance from light source
         self.sim.start()
     
     def compute_fitness(self):
         self.sim.wait_to_finish()
 
-        y = self.sim.get_sensor_data(sensor_id=self.position_sensor_id, svi=1)
-        self.fitness = y[-1]
+#         self.fitness = self.sim.get_sensor_data(sensor_id=self.position_sensor_id, svi=1)[-1]
+        self.fitness += self.sim.get_sensor_data(sensor_id=self.distance_sensor_id)[-1]
         del self.sim # so deepcopy does not copy the simulator
 
     def mutate(self):

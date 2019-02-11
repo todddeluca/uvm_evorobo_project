@@ -1,7 +1,8 @@
 
-from individual import Individual
 import copy
 import numpy as np
+
+from individual import Individual
 
 
 class Population:
@@ -18,12 +19,19 @@ class Population:
     def __repr__(self):
         return ', '.join([str(indiv) for indiv in self.p])
             
-    def evaluate(self, play_blind=True, play_paused=False):
+    def evaluate(self, envs, play_blind=True, play_paused=False):
         for indiv in self.p:
-            indiv.start_evaluation(play_blind=play_blind, play_paused=play_paused)
+            indiv.fitness = 0
             
+        for env in envs.envs:
+            for indiv in self.p:
+                indiv.start_evaluation(env, play_blind=play_blind, play_paused=play_paused)
+
+            for indiv in self.p:
+                indiv.compute_fitness()
+                
         for indiv in self.p:
-            indiv.compute_fitness()
+            indiv.fitness /= len(envs.envs) # average fitness per environment
             
     def mutate(self):
         for indiv in self.p:

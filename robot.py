@@ -3,8 +3,9 @@
 import pyrosim
 import math
 import matplotlib.pyplot as plt
-import constants as c
 import random
+
+import constants as c
 
 
 '''
@@ -38,9 +39,10 @@ class Robot:
     def __init__(self, sim, weights):
         objs = self.send_objects(sim)
         joints = self.send_joints(sim, objs)
-        touch_sensors, p4 = self.send_sensors(sim, objs)
+        sensors, p4, l5 = self.send_sensors(sim, objs)
         self.p4 = p4
-        sensor_neurons, motor_neurons = self.send_neurons(sim, touch_sensors, joints)
+        self.l5 = l5
+        sensor_neurons, motor_neurons = self.send_neurons(sim, sensors, joints)
         self.send_synapses(sim, weights, sensor_neurons, motor_neurons)
         
     def send_joints(self, sim, objs):
@@ -82,12 +84,14 @@ class Robot:
         t2 = sim.send_touch_sensor(body_id=o7)
         t3 = sim.send_touch_sensor(body_id=o8)
         p4 = sim.send_position_sensor(body_id=o0)
-        return [t0, t1, t2, t3], p4
+        l5 = sim.send_light_sensor(body_id=o0)
+        return [t0, t1, t2, t3, l5], p4, l5
 
-    def send_neurons(self, sim, touch_sensors, joints):
+
+    def send_neurons(self, sim, sensors, joints):
         sensor_neurons = []
-        for touch_sensor in touch_sensors:
-            sensor_neurons.append(sim.send_sensor_neuron(sensor_id=touch_sensor))
+        for sensor in sensors:
+            sensor_neurons.append(sim.send_sensor_neuron(sensor_id=sensor))
             
         motor_neurons = []
         for joint in joints:
