@@ -1,0 +1,20 @@
+# FROM python:3
+FROM jamesbrink/opengl
+
+RUN apt-get update && \
+    apt-get install -y build-essential libx11-dev xorg-dev libglu1-mesa-dev freeglut3-dev libglu1-mesa libglu1-mesa-dev libgl1-mesa-glx libgl1-mesa-dev python3
+
+WORKDIR /workdir
+
+COPY ./requirements.txt ./
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+RUN git clone http://github.com/ccappelle/pyrosim && \
+    cd pyrosim && \
+    ./build.sh && \
+    pip install -e .
+    
+# for testing display with xeyes
+RUN apt-get install -y x11-apps 
+    
