@@ -9,8 +9,10 @@ import constants as c
 from population import Population
 from environments import Environments
 
+# environments have a light source in different locations
 envs = Environments()
 
+# population contains multiple individuals
 parents = Population(c.pop_size)
 parents.initialize()
 parents.evaluate(envs, play_blind=True, play_paused=False)
@@ -25,3 +27,8 @@ for i in range(1, c.num_gens + 1):
     
 parents.p = parents.p[:1]
 parents.evaluate(envs, play_blind=False)
+
+# save best model
+with open('robot.pkl', 'wb') as fh:
+    pickle.dump(parents, fh)
+    

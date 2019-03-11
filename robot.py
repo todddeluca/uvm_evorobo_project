@@ -3,6 +3,7 @@
 import pyrosim
 import math
 import matplotlib.pyplot as plt
+import numpy as np
 import random
 
 import constants as c
@@ -34,66 +35,82 @@ j6, 0, 4, -L/2, 0, L+R, 0, 1, 0 # body-purple joint
 j7, 4, 8, -1.5L, 0, L+R, 0, 1, 0 # purple-purple joint
 '''
 
+'''
+Spider:
+
+A spider is a central sphere connected to n legs, where n=2k for some positive integer k. The legs are evenly distributed around the
+xy plane bisecting the sphere.
+
+L is leg length.
+R is leg radius.
+S is sphere radius.
+
+Upper leg angle angle (around circumference of xy plane) of leg i is \theta_i = (2\pi / k) * (i + 1/2).
+Upper leg: x=(S+0.5L)*cos(theta), y=(S+0.5L)*sin(theta), z=L+R. r1=cos(theta), r2=sin(theta), r3=0, r, g, b
+Lower leg: x=(S+L)*cos(theta), y=(S+L)*sin(theta), z=0.5*L+R, r1=0, r2=0, r3=1, r, g, b
+
+Body to upper leg joint: x=S*cos(theta), y=S*sin(theta), z=L+R, n1=-sin(theta), n2=cos(theta), n3=0, lo=-math.pi/2 , hi=math.pi/2
+upper to lower leg joint: x=(S+L)*cos(theta), y=(S+L)*sin(theta), z=L+R, n1=-sin(theta), n2=cos(theta), n3=0, lo=-math.pi/2 , hi=math.pi/2
+
+'''
 
 class Robot:
-    def __init__(self, sim, weights):
-        objs = self.send_objects(sim)
-        joints = self.send_joints(sim, objs)
-        sensors, p4, l5 = self.send_sensors(sim, objs)
+    def __init__(self, sim, weights, num_legs=4):
+        body, upper_legs, lower_legs, joints = self.send_objects_and_joints(sim, num_legs)
+        sensors, p4, l5 = self.send_sensors(sim, body, upper_legs, lower_legs)
         self.p4 = p4
         self.l5 = l5
         sensor_neurons, motor_neurons = self.send_neurons(sim, sensors, joints)
         self.send_synapses(sim, weights, sensor_neurons, motor_neurons)
         
-    def send_joints(self, sim, objs):
-        o0, o1, o2, o3, o4, o5, o6, o7, o8 = objs
-        j0 = sim.send_hinge_joint(first_body_id=o0, second_body_id=o1, x=0, y=c.L / 2, z=c.L + c.R, 
-                                  n1=-1, n2=0, n3=0, lo=-math.pi/2 , hi=math.pi/2)
-        j1 = sim.send_hinge_joint(first_body_id=o1, second_body_id=o5, x=0, y=1.5 * c.L, z=c.L + c.R, 
-                                  n1=-1, n2=0, n3=0, lo=-math.pi/2 , hi=math.pi/2)
-        j2 = sim.send_hinge_joint(first_body_id=o0, second_body_id=o2, x=c.L / 2, y=0, z=c.L + c.R, 
-                                  n1=0, n2=1, n3=0, lo=-math.pi/2 , hi=math.pi/2)
-        j3 = sim.send_hinge_joint(first_body_id=o2, second_body_id=o6, x=1.5 * c.L, y=0, z=c.L + c.R, 
-                                  n1=0, n2=1, n3=0, lo=-math.pi/2 , hi=math.pi/2)
-        j4 = sim.send_hinge_joint(first_body_id=o0, second_body_id=o3, x=0, y=-c.L / 2, z=c.L + c.R, 
-                                  n1=-1, n2=0, n3=0, lo=-math.pi/2 , hi=math.pi/2)
-        j5 = sim.send_hinge_joint(first_body_id=o3, second_body_id=o7, x=0, y=-1.5 * c.L, z=c.L + c.R, 
-                                  n1=-1, n2=0, n3=0, lo=-math.pi/2 , hi=math.pi/2)
-        j6 = sim.send_hinge_joint(first_body_id=o0, second_body_id=o4, x=-c.L / 2, y=0, z=c.L + c.R, 
-                                  n1=0, n2=1, n3=0, lo=-math.pi/2 , hi=math.pi/2)
-        j7 = sim.send_hinge_joint(first_body_id=o4, second_body_id=o8, x=-1.5 * c.L, y=0, z=c.L + c.R, 
-                                  n1=0, n2=1, n3=0, lo=-math.pi/2 , hi=math.pi/2)
-        return [j0, j1, j2, j3, j4, j5, j6, j7]
+    def send_objects_and_joints(self, sim, num_legs):
+        o0 = sim.send_sphere(x=0, y=0, z=c.L+c.R, radius=c.S, r=0.5, g=0.5, b=0.5)
+        upper_legs = []
+        lower_legs = []
+        joints = []
+        for i in range(num_legs):
+            theta = (2 * np.pi / num_legs) * i # (i + 0.5) # i=1 central front leg, (i+0.5)=2 symmetric front legs
+            upper = sim.send_cylinder(x=(c.S + 0.5 * c.L) * np.cos(theta), 
+                                    y=(c.S + 0.5 * c.L) * np.sin(theta), 
+                                    z=(c.L + c.R), length=c.L, radius=c.R, 
+                                    r1=np.cos(theta), r2=np.sin(theta), r3=0,
+                                    r=(1+np.cos(theta))/2, g=0, b=(1+np.sin(theta))/2)
+            upper_legs.append(upper)
+            lower = sim.send_cylinder(x=(c.S + c.L) * np.cos(theta), 
+                                    y=(c.S + c.L) * np.sin(theta),
+                                    z=(0.5 * c.L + c.R), length=c.L, radius=c.R,
+                                    r1=0, r2=0, r3=1,
+                                    r=(1+np.cos(theta))/4, g=0, b=(1+np.sin(theta))/4)
+            lower_legs.append(lower)
+            # body-to-upper-leg joint
+            j0 = sim.send_hinge_joint(first_body_id=o0, second_body_id=upper, 
+                                      x=c.S*np.cos(theta), y=c.S*np.sin(theta), z=c.L + c.R, 
+                                      n1=-np.sin(theta), n2=np.cos(theta), n3=0, 
+                                      lo=-math.pi/2 , hi=math.pi/2)
+            # upper-to-lower-leg joint
+            j1 = sim.send_hinge_joint(first_body_id=upper, second_body_id=lower, 
+                                      x=(c.S+c.L)*np.cos(theta), y=(c.S+c.L)*np.sin(theta), z=c.L + c.R, 
+                                      n1=-np.sin(theta), n2=np.cos(theta), n3=0, 
+                                      lo=-math.pi/2 , hi=math.pi/2)
+            joints += [j0, j1]
 
-    def send_objects(self, sim):
-        o0 = sim.send_box(x=0, y=0, z=c.L + c.R, length=c.L, width=c.L, height=2 * c.R, r=0.5, g=0.5, b=0.5)
-        o1 = sim.send_cylinder(x=0, y=c.L, z=c.L + c.R, length=c.L, radius=c.R, r1=0 , r2=1, r3=0, r=0.5, g=0, b=0)
-        o2 = sim.send_cylinder(x=c.L, y=0, z=c.L + c.R, length=c.L, radius=c.R, r1=1 , r2=0, r3=0, r=0, g=0.5, b=0)
-        o3 = sim.send_cylinder(x=0, y=-c.L, z=c.L + c.R, length=c.L, radius=c.R, r1=0 , r2=1, r3=0, r=0, g=0, b=0.5)
-        o4 = sim.send_cylinder(x=-c.L, y=0, z=c.L + c.R, length=c.L, radius=c.R, r1=1 , r2=0, r3=0, r=0.5, g=0, b=0.5)
-        o5 = sim.send_cylinder(x=0, y=1.5 * c.L, z=0.5 * c.L + c.R, length=c.L, radius=c.R, r1=0 , r2=0, r3=1, r=1, g=0, b=0)
-        o6 = sim.send_cylinder(x=1.5 * c.L, y=0, z=0.5 * c.L + c.R, length=c.L, radius=c.R, r1=0 , r2=0, r3=1, r=0, g=1, b=0)
-        o7 = sim.send_cylinder(x=0, y=-1.5 * c.L, z=0.5 * c.L + c.R, length=c.L, radius=c.R, r1=0 , r2=0, r3=1, r=0, g=0, b=1)
-        o8 = sim.send_cylinder(x=-1.5 * c.L, y=0, z=0.5 * c.L + c.R, length=c.L, radius=c.R, r1=0 , r2=0, r3=1, r=1, g=0, b=1)
-        return [o0, o1, o2, o3, o4, o5, o6, o7, o8]
+        return o0, upper_legs, lower_legs, joints
             
-    def send_sensors(self, sim, objs):
-        o0, o1, o2, o3, o4, o5, o6, o7, o8 = objs
-        t0 = sim.send_touch_sensor(body_id=o5)
-        t1 = sim.send_touch_sensor(body_id=o6)
-        t2 = sim.send_touch_sensor(body_id=o7)
-        t3 = sim.send_touch_sensor(body_id=o8)
-        
-        p4 = sim.send_position_sensor(body_id=o0)
-        l5 = sim.send_light_sensor(body_id=o0)
+    def send_sensors(self, sim, body, upper_legs, lower_legs):
+        sensors = []
+        # lower limb touch sensors
+        for lower in lower_legs:
+            sensors.append(sim.send_touch_sensor(body_id=lower))
         
         # upper limb touch sensors
-        t6 = sim.send_touch_sensor(body_id=o1)
-        t7 = sim.send_touch_sensor(body_id=o2)
-        t8 = sim.send_touch_sensor(body_id=o3)
-        t9 = sim.send_touch_sensor(body_id=o4)
-        return [t0, t1, t2, t3, l5, t6, t7, t8, t9], p4, l5
-
+#         for upper in upper_legs:
+#             sensors.append(sim.send_touch_sensor(body_id=upper))
+        
+        p4 = sim.send_position_sensor(body_id=body)
+        l5 = sim.send_light_sensor(body_id=body)
+        sensors.append(l5)
+        
+        return sensors, p4, l5
 
     def send_neurons(self, sim, sensors, joints):
         sensor_neurons = []

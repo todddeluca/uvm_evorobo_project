@@ -12,6 +12,9 @@ class Population:
         self.p = []
         
     def initialize(self):
+        '''
+        Construct the individuals of the population
+        '''
         self.p = []
         for i in range(self.pop_size):
             self.p.append(Individual(id_=i))
@@ -20,6 +23,9 @@ class Population:
         return ', '.join([str(indiv) for indiv in self.p])
             
     def evaluate(self, envs, play_blind=True, play_paused=False):
+        '''
+        Evaluate each individual in each environment. Compute the fitness.
+        '''
         for indiv in self.p:
             indiv.fitness = 0
             
