@@ -1,6 +1,5 @@
 
 
-import matplotlib.pyplot as plt
 import random
 import copy
 import pickle
@@ -15,7 +14,7 @@ envs = Environments()
 # population contains multiple individuals
 parents = Population(c.pop_size)
 parents.initialize()
-parents.evaluate(envs, play_blind=True, play_paused=False)
+parents.evaluate(envs, play_blind=False, play_paused=True)
 print(f'0: {parents}')
 
 for i in range(1, c.num_gens + 1):

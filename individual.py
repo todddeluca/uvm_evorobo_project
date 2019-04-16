@@ -1,27 +1,31 @@
 import pyrosim
 import math
-import matplotlib.pyplot as plt
 import random
 import numpy as np
 
-import constants as c
 from robot import Robot
 
 
 class Individual:
     
-    def __init__(self, id_):
-        self.num_legs = c.num_legs
+    def __init__(self, id_, num_legs, L, R, S, eval_time):
+        self.num_legs = num_legs
+        self.L = L
+        self.R = R
+        self.S = S
+        self.eval_time = eval_time
+        # rows=num_sensors=(lower leg touch sensors + light sensor) , cols=num_motors=number of joints
         self.genome = np.random.random((1 + self.num_legs, self.num_legs * 2)) * 2 - 1
         self.fitness = 0
         self.id_ = id_
         
     def start_evaluation(self, env, play_blind=True, play_paused=False):
-        self.sim = pyrosim.Simulator(play_paused=play_paused, eval_time=c.eval_time, play_blind=play_blind)
+        self.sim = pyrosim.Simulator(play_paused=play_paused, eval_time=self.eval_time, play_blind=play_blind)
         env.send_to(self.sim)
-        robot = Robot(self.sim, weights=self.genome, num_legs=self.num_legs)
+        robot = Robot(self.sim, weights=self.genome, num_legs=self.num_legs, L=self.L, R=self.R, S=self.S)
         self.position_sensor_id = robot.p4
         self.distance_sensor_id = robot.l5 # distance from light source
+        self.sim.assign_collision(robot.group, env.group)
         self.sim.start()
     
     def compute_fitness(self):

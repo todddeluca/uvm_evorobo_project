@@ -2,11 +2,8 @@
 
 import pyrosim
 import math
-import matplotlib.pyplot as plt
 import numpy as np
 import random
-
-import constants as c
 
 
 '''
@@ -55,41 +52,50 @@ upper to lower leg joint: x=(S+L)*cos(theta), y=(S+L)*sin(theta), z=L+R, n1=-sin
 '''
 
 class Robot:
-    def __init__(self, sim, weights, num_legs=4):
-        body, upper_legs, lower_legs, joints = self.send_objects_and_joints(sim, num_legs)
+    def __init__(self, sim, weights, num_legs=4, L=1, R=1, S=1):
+        '''
+        L: leg length
+        R: leg radius
+        S: body radius
+        '''
+        self.group = 'robot'
+        body, upper_legs, lower_legs, joints = self.send_objects_and_joints(sim, num_legs, L, R, S)
         sensors, p4, l5 = self.send_sensors(sim, body, upper_legs, lower_legs)
         self.p4 = p4
         self.l5 = l5
         sensor_neurons, motor_neurons = self.send_neurons(sim, sensors, joints)
         self.send_synapses(sim, weights, sensor_neurons, motor_neurons)
         
-    def send_objects_and_joints(self, sim, num_legs):
-        o0 = sim.send_sphere(x=0, y=0, z=c.L+c.R, radius=c.S, r=0.5, g=0.5, b=0.5)
+    def send_objects_and_joints(self, sim, num_legs, L, R, S):
+        o0 = sim.send_sphere(x=0, y=0, z=L+R, radius=S, r=0.5, g=0.5, b=0.5,
+                             collision_group=self.group)
         upper_legs = []
         lower_legs = []
         joints = []
         for i in range(num_legs):
             theta = (2 * np.pi / num_legs) * i # (i + 0.5) # i=1 central front leg, (i+0.5)=2 symmetric front legs
-            upper = sim.send_cylinder(x=(c.S + 0.5 * c.L) * np.cos(theta), 
-                                    y=(c.S + 0.5 * c.L) * np.sin(theta), 
-                                    z=(c.L + c.R), length=c.L, radius=c.R, 
+            upper = sim.send_cylinder(x=(S + 0.5 * L) * np.cos(theta), 
+                                    y=(S + 0.5 * L) * np.sin(theta), 
+                                    z=(L + R), length=L, radius=R, 
                                     r1=np.cos(theta), r2=np.sin(theta), r3=0,
-                                    r=(1+np.cos(theta))/2, g=0, b=(1+np.sin(theta))/2)
+                                    r=(1+np.cos(theta))/2, g=0, b=(1+np.sin(theta))/2,
+                                     collision_group=self.group)
             upper_legs.append(upper)
-            lower = sim.send_cylinder(x=(c.S + c.L) * np.cos(theta), 
-                                    y=(c.S + c.L) * np.sin(theta),
-                                    z=(0.5 * c.L + c.R), length=c.L, radius=c.R,
+            lower = sim.send_cylinder(x=(S + L) * np.cos(theta), 
+                                    y=(S + L) * np.sin(theta),
+                                    z=(0.5 * L + R), length=L, radius=R,
                                     r1=0, r2=0, r3=1,
-                                    r=(1+np.cos(theta))/4, g=0, b=(1+np.sin(theta))/4)
+                                    r=(1+np.cos(theta))/4, g=0, b=(1+np.sin(theta))/4,
+                                     collision_group=self.group)
             lower_legs.append(lower)
             # body-to-upper-leg joint
             j0 = sim.send_hinge_joint(first_body_id=o0, second_body_id=upper, 
-                                      x=c.S*np.cos(theta), y=c.S*np.sin(theta), z=c.L + c.R, 
+                                      x=S*np.cos(theta), y=S*np.sin(theta), z=L + R, 
                                       n1=-np.sin(theta), n2=np.cos(theta), n3=0, 
                                       lo=-math.pi/2 , hi=math.pi/2)
             # upper-to-lower-leg joint
             j1 = sim.send_hinge_joint(first_body_id=upper, second_body_id=lower, 
-                                      x=(c.S+c.L)*np.cos(theta), y=(c.S+c.L)*np.sin(theta), z=c.L + c.R, 
+                                      x=(S+L)*np.cos(theta), y=(S+L)*np.sin(theta), z=L + R, 
                                       n1=-np.sin(theta), n2=np.cos(theta), n3=0, 
                                       lo=-math.pi/2 , hi=math.pi/2)
             joints += [j0, j1]
