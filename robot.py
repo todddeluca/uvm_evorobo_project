@@ -7,32 +7,6 @@ import random
 
 
 '''
-Spreadsheet of object and joint values
-
-obj, x, y, z, shape, shape, shape, r1, r2, r3, r, g, b
-o0, 0, 0, L + R, length=L, width=L, height=2R, , , , 0.5, 0.5, 0.5 # grey square body
-o1, 0, L, L + R, length=L, radius=R, null, 0, 1, 0, 0.5, 0, 0 # upper dark red forward (y-dir) leg
-o2, L, 0, L + R, length=L, radius=R, null, 1, 0, 0, 0, 0.5, 0 # upper dark green right (x-dir) leg
-o3, 0, -L, L + R, length=L, radius=R, null, 0, 1, 0, 0, 0, 0.5 # upper dark blue backward (-y-dir) leg
-o4, -L, 0, L + R, length=L, radius=R, null, 1, 0, 0, 0.5, 0, 0.5 # upper dark purple left (-x-dir) leg
-o5, 0, 1.5 * L, 0.5 * L + R, length=L, radius=R, null, 0, 0, 1, 1, 0, 0 # lower red forward leg
-o6, 1.5 * L, 0, 0.5 * L + R, length=L, radius=R, null, 0, 0, 1, 0, 1, 0 # lower green right leg
-o7, 0, -1.5 * L, 0.5 * L + R, length=L, radius=R, null, 0, 0, 1, 0, 0, 1 # lower blue backward leg
-o8, -1.5 * L, 0, 0.5 * L + R, length=L, radius=R, null, 0, 0, 1, 1, 0, 1 # lower purple right leg
-
-
-joint, 1st_obj, 2nd_obj, x, y, z, n1, n2, n3
-j0, 0, 1, 0, L/2, L+R, -1, 0, 0 # body-red joint
-j1, 1, 5, 0, 1.5L, L+R, -1, 0, 0 # red-red joint
-j2, 0, 2, L/2, 0, L+R, 0, 1, 0 # body-green joint
-j3, 2, 6, 1.5L, 0, L+R, 0, 1, 0 # green-green joint
-j4, 0, 3, 0, -L/2, L+R, -1, 0, 0 # body-blue joint
-j5, 3, 7, 0, -1.5L, L+R, -1, 0, 0 # blue-blue joint
-j6, 0, 4, -L/2, 0, L+R, 0, 1, 0 # body-purple joint
-j7, 4, 8, -1.5L, 0, L+R, 0, 1, 0 # purple-purple joint
-'''
-
-'''
 Spider:
 
 A spider is a central sphere connected to n legs, where n=2k for some positive integer k. The legs are evenly distributed around the
@@ -48,11 +22,10 @@ Lower leg: x=(S+L)*cos(theta), y=(S+L)*sin(theta), z=0.5*L+R, r1=0, r2=0, r3=1, 
 
 Body to upper leg joint: x=S*cos(theta), y=S*sin(theta), z=L+R, n1=-sin(theta), n2=cos(theta), n3=0, lo=-math.pi/2 , hi=math.pi/2
 upper to lower leg joint: x=(S+L)*cos(theta), y=(S+L)*sin(theta), z=L+R, n1=-sin(theta), n2=cos(theta), n3=0, lo=-math.pi/2 , hi=math.pi/2
-
 '''
 
 class Robot:
-    def __init__(self, sim, weights, num_legs=4, L=1, R=1, S=1):
+    def __init__(self, sim, weights, num_legs=4, L=1, R=1, S=1, num_hidden=4, num_hidden_layers=0):
         '''
         L: leg length
         R: leg radius
@@ -60,11 +33,13 @@ class Robot:
         '''
         self.group = 'robot'
         body, upper_legs, lower_legs, joints = self.send_objects_and_joints(sim, num_legs, L, R, S)
-        sensors, p4, l5 = self.send_sensors(sim, body, upper_legs, lower_legs)
+        sensors, p4, l5, vid = self.send_sensors(sim, body, upper_legs, lower_legs)
         self.p4 = p4
         self.l5 = l5
-        sensor_neurons, motor_neurons = self.send_neurons(sim, sensors, joints)
-        self.send_synapses(sim, weights, sensor_neurons, motor_neurons)
+        self.v_id = vid # vestibular sensor
+        sensor_neurons, motor_neurons, hidden_layers, bias_neuron = self.send_neurons(
+            sim, sensors, joints, num_hidden, num_hidden_layers)
+        self.send_synapses(sim, weights, sensor_neurons, motor_neurons, hidden_layers, bias_neuron)
         
     def send_objects_and_joints(self, sim, num_legs, L, R, S):
         o0 = sim.send_sphere(x=0, y=0, z=L+R, radius=S, r=0.5, g=0.5, b=0.5,
@@ -73,7 +48,7 @@ class Robot:
         lower_legs = []
         joints = []
         for i in range(num_legs):
-            theta = (2 * np.pi / num_legs) * i # (i + 0.5) # i=1 central front leg, (i+0.5)=2 symmetric front legs
+            theta = (2 * np.pi / num_legs) * (i + 0.5) # i=1 central front leg, (i+0.5)=2 symmetric front legs
             upper = sim.send_cylinder(x=(S + 0.5 * L) * np.cos(theta), 
                                     y=(S + 0.5 * L) * np.sin(theta), 
                                     z=(L + R), length=L, radius=R, 
@@ -114,11 +89,15 @@ class Robot:
         
         p4 = sim.send_position_sensor(body_id=body)
         l5 = sim.send_light_sensor(body_id=body)
-        sensors.append(l5)
+#         sensors.append(l5)
+        vid = sim.send_vestibular_sensor(body_id=body)
+#         sensors.append(vid)
         
-        return sensors, p4, l5
+        return sensors, p4, l5, vid
 
-    def send_neurons(self, sim, sensors, joints):
+    def send_neurons(self, sim, sensors, joints, num_hidden, num_hidden_layers):
+        bias_neuron = sim.send_bias_neuron()
+
         sensor_neurons = []
         for sensor in sensors:
             sensor_neurons.append(sim.send_sensor_neuron(sensor_id=sensor))
@@ -127,12 +106,31 @@ class Robot:
         for joint in joints:
             motor_neurons.append(sim.send_motor_neuron(joint_id=joint, tau=0.3))
             
-        return sensor_neurons, motor_neurons
+        hidden_layers = []
+        for _ in range(num_hidden_layers):
+            hidden_neurons = []
+            for _ in range(num_hidden):
+                hidden_neurons.append(sim.send_hidden_neuron())
+                
+            hidden_layers.append(hidden_neurons)
+            
+        return sensor_neurons, motor_neurons, hidden_layers, bias_neuron
         
-    def send_synapses(self, sim, weights, sensor_neurons, motor_neurons):
-        for i, s in enumerate(sensor_neurons):
-            for j, m in enumerate(motor_neurons):
-#                 sim.send_synapse(source_neuron_id=s, target_neuron_id=m, weight=random.random() * 2 - 1)
-                sim.send_synapse(source_neuron_id=s, target_neuron_id=m, weight=weights[i, j])
+    def send_synapses(self, sim, weights, sensor_neurons, motor_neurons, hidden_layers, bias_neuron):
+        layers = [sensor_neurons + [bias_neuron]] # add bias to input layer
+        for layer in hidden_layers:
+            layers.append(layer + [bias_neuron]) # add bias to hidden layers
+        layers.append(motor_neurons)
+        
+        pairs = [] # source and target neuron pairs
+        for i in range(len(layers) - 1):
+            in_layer = layers[i]
+            out_layer = layers[i + 1]
+            for inp in in_layer:
+                for out in out_layer:
+                    pairs.append((inp, out))
+            
+        for i, (s, t) in enumerate(pairs):
+            sim.send_synapse(source_neuron_id=s, target_neuron_id=t, weight=weights[i])
         
         

@@ -32,11 +32,19 @@ Install estool, a suite of evolutionary strategies from hardmaru (David Ha)
 
 ## Usage
 
-python geneticalgorithm.py
+Evolve parameters and save them:
 
+    python run.py train
 
+Play (i.e. run a visible simulation using) the default saved parameters (from `robots.pkl`):
 
+    python run.py play
 
+Evolve parameters starting from an existing set of parameters (or population):
 
+    time python run.py train --restore experiments/exp_20190421_230912_robot.pkl
 
+Play parameters saved in a file:
+
+    time python run.py play --restore experiments/exp_20190421_230912_robot.pkl
 
