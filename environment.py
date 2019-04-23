@@ -79,6 +79,9 @@ class StairsEnv:
         # last "stair" is the light source
         sim.send_light_source(body_id=stair_ids[-1])
         
+        self.x_min = -self.width / 2
+        self.x_max = self.width / 2 
+        
         # dummy touch id for fitness function
         touch_ids = [sim.send_touch_sensor(body_id=stair_ids[-1])]
         return touch_ids
@@ -102,12 +105,7 @@ class AngledLatticeEnv:
                         (self.y_offset + self.thick + i * np.cos(self.angle) * self.rung_spacing), 
                         (i * np.sin(self.angle) * self.rung_spacing + self.thick)
                        ) for i in range(self.num_rungs)]
-        # x, y, z coord of center of each rail
-        rail_coords = [(-1 * (self.num_rails - 1) * self.rail_spacing / 2 + i * self.rail_spacing,
-                        (rung_coords[0][1] + rung_coords[-1][1]) / 2, 
-                        (rung_coords[0][2] + rung_coords[-1][2]) / 2
-                       ) for i in range(self.num_rails)]
-        # rungs
+        # make rungs
         rung_ids = []
         for x, y, z in rung_coords:
             rung_id = sim.send_cylinder(x=x, y=y, z=z,
@@ -120,8 +118,14 @@ class AngledLatticeEnv:
         # fix the rungs in place
         for id in rung_ids:
             sim.send_fixed_joint(id, -1)
+            
+        # x, y, z coord of center of each rail
+        rail_coords = [(-1 * (self.num_rails - 1) * self.rail_spacing / 2 + i * self.rail_spacing,
+                        (rung_coords[0][1] + rung_coords[-1][1]) / 2, 
+                        (rung_coords[0][2] + rung_coords[-1][2]) / 2
+                       ) for i in range(self.num_rails)]
         
-        # rails
+        # make rails
         rail_ids = []
         for x, y, z in rail_coords:
             rail_id = sim.send_cylinder(x=x, y=y, z=z,
@@ -165,6 +169,9 @@ class AngledLatticeEnv:
         for id in (base_id, stem_id, bowl_id):
             sim.send_fixed_joint(id, -1)
         
+        self.x_min = rail_coords[0][0]
+        self.x_max = rail_coords[-1][0]
+        
         # dummy touch id for fitness function
         touch_ids = [sim.send_touch_sensor(body_id=rung_ids[-1])]
         return touch_ids
@@ -206,6 +213,9 @@ class AngledLadderEnv:
         
         # last "rung" is the light source
         sim.send_light_source(body_id=rung_ids[-1])
+        
+        self.x_min = -self.width / 2
+        self.x_max = self.width / 2 
         
         # dummy touch id for fitness function
         touch_ids = [sim.send_touch_sensor(body_id=rung_ids[-1])]

@@ -38,6 +38,7 @@ class Individual:
         self.num_hl = num_hl
         
     def start_evaluation(self, env, play_blind=True, play_paused=False):
+        self.env = env # save for fitness
         self.sim = pyrosim.Simulator(play_paused=play_paused, eval_time=self.eval_time,
                                      play_blind=play_blind, dt=0.025) # default dt=0.05
         self.tids = env.send_to(self.sim)
@@ -55,6 +56,10 @@ class Individual:
             
         # y-position sensor fitness
         y_fitness = self.sim.get_sensor_data(sensor_id=self.position_sensor_id, svi=1)[-1]
+        
+        # x position fitness penalizes going around the obstacle.
+        x_max_dist = np.abs(self.sim.get_sensor_data(sensor_id=self.position_sensor_id, svi=0)).max()
+        x_fitness = -1 * (x_max_dist - max(abs(self.env.x_min), abs(self.env.x_max)))**2 # 
         
         # vestibular sensor fitness. angle between body and vertical.
         v_data = self.sim.get_sensor_data(sensor_id=self.v_id)
@@ -148,7 +153,7 @@ def train(filename=None, play_paused=False):
         y_offset=L * 5,
         # stairs
         num_stairs=20,
-        stair_width=L * 20,
+        stair_width=L * 80,
         stair_depth=L, # when angle=pi/2, depth == rung spacing
         stair_thickness=L / 2.5,
         stair_angle=np.pi / 2 / 3.8,
@@ -156,13 +161,13 @@ def train(filename=None, play_paused=False):
         # angled ladder
         ladder_num_rungs=20,
         ladder_angle=np.pi / 2 / 4,
-        ladder_width=L * 20,
+        ladder_width=L * 80,
         ladder_thickness=L / 5,
         ladder_y_offset=L * 2,
         ladder_spacing=L,
         # angled lattice
         lat_num_rungs=20,
-        lat_num_rails=10,
+        lat_num_rails=80,
         lat_rung_spacing=L,
         lat_rail_spacing=L,
         lat_thickness=L / 5,
@@ -238,33 +243,38 @@ def train(filename=None, play_paused=False):
     params = solver.result()[0]
     solutions = np.expand_dims(params, axis=0)
     fits = evaluator(solutions, play_blind=False, play_paused=play_paused)    
-    save_model('robot.pkl', hp, params, evaluator)
-    save_model(f'experiments/{expid}_robot.pkl', hp, params, evaluator)
+    save_model('robot.pkl', hp, params, evaluator, solver)
+    save_model(f'experiments/{expid}_robot.pkl', hp, params, evaluator, solver)
     
     
 def play(filename=None, play_paused=False):
     if filename is None:
         filename = 'robot.pkl'
         
-    hp, params, evaluator = load_model(filename)
+    hp, params, evaluator, *etc = load_model(filename)
     solutions = np.expand_dims(params, axis=0)
 #     evaluator.eval_time = 4000
 #     evaluator.env.num_stairs = 10
     if not hasattr(evaluator, 'max_parallel'):
         evaluator.max_parallel = None
+        
+    for attr in dir(hp):
+        if not attr.startswith('_'):
+            print(f'{attr}: {getattr(hp, attr)}')
+
     evaluator(solutions, play_blind=False, play_paused=play_paused)
     
     
-def save_model(filename, hp, params, evaluator):
+def save_model(filename, *model):
     with open(filename, 'wb') as fh:
-        pickle.dump((hp, params, evaluator), fh)
+        pickle.dump(model, fh)
         
 
 def load_model(filename):
     with open(filename, 'rb') as fh:
-        hp, params, evaluator = pickle.load(fh)
+        model = pickle.load(fh)
         
-    return hp, params, evaluator
+    return model
 
 
 if __name__ == '__main__':
