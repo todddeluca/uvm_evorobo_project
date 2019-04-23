@@ -62,7 +62,8 @@ class StairsEnv:
             r = 1 if i < self.num_stairs else 254 / 255
             g = 1 if i < self.num_stairs else 182 / 255
             b = 1 if i < self.num_stairs else 37 / 255
-            sid = sim.send_box(x=0, y=(self.y_offset + 0.5 * self.depth + i * self.run), 
+            sid = sim.send_box(x=0, 
+                               y=(self.y_offset + 0.5 * self.depth + i * self.run), 
                                z=(i * self.rise + 0.5 * self.thick),
 #                                r1=0, r2=0, r3=0,
                                length=length, width=width, height=self.thick,
@@ -80,6 +81,134 @@ class StairsEnv:
         
         # dummy touch id for fitness function
         touch_ids = [sim.send_touch_sensor(body_id=stair_ids[-1])]
+        return touch_ids
+
+
+class AngledLatticeEnv:
+    '''Constructs a rectangular lattice whose top rung is a light source.'''
+    def __init__(self, num_rungs, num_rails, rung_spacing, rail_spacing, thickness, angle, y_offset):
+        self.num_rungs = num_rungs
+        self.num_rails = num_rails
+        self.rung_spacing = rung_spacing
+        self.rail_spacing = rail_spacing
+        self.thick = thickness # rung thickness/radius
+        self.y_offset = y_offset
+        self.angle = angle # angle of ladder in radians, from 0 to pi/2
+        self.group = 'env' # collision group
+        
+    def send_to(self, sim):
+        # x, y, z coord of center of each rung
+        rung_coords = [(0, 
+                        (self.y_offset + self.thick + i * np.cos(self.angle) * self.rung_spacing), 
+                        (i * np.sin(self.angle) * self.rung_spacing + self.thick)
+                       ) for i in range(self.num_rungs)]
+        # x, y, z coord of center of each rail
+        rail_coords = [(-1 * (self.num_rails - 1) * self.rail_spacing / 2 + i * self.rail_spacing,
+                        (rung_coords[0][1] + rung_coords[-1][1]) / 2, 
+                        (rung_coords[0][2] + rung_coords[-1][2]) / 2
+                       ) for i in range(self.num_rails)]
+        # rungs
+        rung_ids = []
+        for x, y, z in rung_coords:
+            rung_id = sim.send_cylinder(x=x, y=y, z=z,
+                                        r1=1, r2=0, r3=0, 
+                                        length=(self.num_rails - 1) * self.rail_spacing,
+                                        radius=self.thick,
+                                        collision_group=self.group)
+            rung_ids.append(rung_id)
+
+        # fix the rungs in place
+        for id in rung_ids:
+            sim.send_fixed_joint(id, -1)
+        
+        # rails
+        rail_ids = []
+        for x, y, z in rail_coords:
+            rail_id = sim.send_cylinder(x=x, y=y, z=z,
+                                        r1=0, r2=np.cos(self.angle), r3=np.sin(self.angle), 
+                                        length=(self.num_rungs - 1) * self.rung_spacing,
+                                        radius=self.thick,
+                                        collision_group=self.group)
+            rail_ids.append(rail_id)
+
+        # fix the rails in place
+        for id in rail_ids:
+            sim.send_fixed_joint(id, -1)
+        
+        # the trophy
+        r = 254 / 255
+        g = 182 / 255
+        b = 37 / 255
+        base_id = sim.send_box(x=0, 
+                               y=rung_coords[-1][1],
+                               z=rung_coords[-1][2] + 1.5 * self.thick,
+#                                r1=0, r2=0, r3=0,
+                               length=self.thick * 4, width=self.thick * 4, height=self.thick,
+                               r=r, g=g, b=b,
+                               collision_group=self.group)
+        stem_id = sim.send_cylinder(x=0, 
+                                    y=rung_coords[-1][1], 
+                                    z=rung_coords[-1][2] + 2 * self.thick + self.thick * 2,
+                                    r1=0, r2=0, r3=1,
+                                    length=self.thick * 4,
+                                    radius=self.thick,
+                                    capped=False,
+                                    r=r, g=g, b=b,
+                                    collision_group=self.group)
+        bowl_id = sim.send_sphere(x=0,
+                                  y=rung_coords[-1][1], 
+                                  z=rung_coords[-1][2] + 2 * self.thick + self.thick * 4 + self.thick * 2,
+                                  radius=self.thick * 2,
+                                  r=r, g=g, b=b,
+                                  collision_group=self.group)
+        sim.send_light_source(body_id=stem_id)
+        for id in (base_id, stem_id, bowl_id):
+            sim.send_fixed_joint(id, -1)
+        
+        # dummy touch id for fitness function
+        touch_ids = [sim.send_touch_sensor(body_id=rung_ids[-1])]
+        return touch_ids
+
+
+class AngledLadderEnv:
+    '''Constructs a ladder whose top rung is a light source.'''
+    def __init__(self, num_rungs, spacing, width, thickness, angle, y_offset):
+        self.num_rungs = num_rungs
+        self.spacing = spacing # rung spacing
+        self.width = width
+        self.thick = thickness # rung thickness/radius
+        self.y_offset = y_offset
+        self.angle = angle # angle of ladder in radians, from 0 to pi/2
+        self.rise = np.sin(self.angle) * self.spacing
+        self.run = np.cos(self.angle) * self.spacing
+        self.group = 'env' # collision group
+        
+    def send_to(self, sim):
+        rung_ids = []
+        for i in range(self.num_rungs + 1):
+            # a small, golden top rung
+            length = self.width if i < self.num_rungs else self.thick
+            r = 1 if i < self.num_rungs else 254 / 255
+            g = 1 if i < self.num_rungs else 182 / 255
+            b = 1 if i < self.num_rungs else 37 / 255
+            r_id = sim.send_cylinder(x=0, 
+                                     y=(self.y_offset + self.thick + i * self.run), 
+                                     z=(i * self.rise + self.thick),
+                                     r1=1, r2=0, r3=0, 
+                                     length=length, radius=self.thick,
+                                     r=r, g=g, b=b,
+                                     collision_group=self.group)
+            rung_ids.append(r_id)
+
+        # fix the rungs in place
+        for r_id in rung_ids:
+            sim.send_fixed_joint(r_id, -1)
+        
+        # last "rung" is the light source
+        sim.send_light_source(body_id=rung_ids[-1])
+        
+        # dummy touch id for fitness function
+        touch_ids = [sim.send_touch_sensor(body_id=rung_ids[-1])]
         return touch_ids
 
     

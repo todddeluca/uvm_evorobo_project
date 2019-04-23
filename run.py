@@ -12,7 +12,7 @@ import pyrosim
 import es # from es import SimpleGA, CMAES, PEPG, OpenES
 
 from robot import Robot
-from environment import LadderEnv, StairsEnv, PhototaxisEnv
+from environment import LadderEnv, StairsEnv, PhototaxisEnv, AngledLadderEnv, AngledLatticeEnv
 from strategy import ParallelHillClimber, AFPO
 
 
@@ -56,23 +56,25 @@ class Individual:
         # y-position sensor fitness
         y_fitness = self.sim.get_sensor_data(sensor_id=self.position_sensor_id, svi=1)[-1]
         
-        # vestibular sensor fitness
+        # vestibular sensor fitness. angle between body and vertical.
         v_data = self.sim.get_sensor_data(sensor_id=self.v_id)
 #         print(f'vestibular data: {v_data}')
+        v_data = np.abs(v_data)
+        v_fitness = 1 + v_data[-1] / np.pi # v_data in [0, pi?]
 
         # light sensor fitness
         light_data = self.sim.get_sensor_data(sensor_id=self.distance_sensor_id)
-        # max of light sensor leads to robots that get high once and then fall down and twitch
-        max_fitness = light_data.max()
         # last reading of sensor leads to robots that get high and cling for dear life.
-        last_fitness = light_data[-1]
-        mean_max_last_fitness = (max_fitness + last_fitness) / 2
+        light_fitness = light_data[-1]
         
         # rung touch sensor fitness
         rung_fitness = sum([self.sim.get_sensor_data(sensor_id=tid).max() for tid in self.tids]) / 10
         
         del self.sim # so deepcopy does not copy the simulator
-        return 1.0 * last_fitness + 0.0 * rung_fitness + 0.0 * max_fitness + 0.0 * y_fitness
+#         fitness = 1.0 * last_fitness + 0.0 * rung_fitness + 0.0 * max_fitness + 0.0 * y_fitness
+#         fitness = light_fitness / v_fitness
+        fitness = light_fitness
+        return fitness
 
 
 class Evaluator:
@@ -124,7 +126,7 @@ class Evaluator:
 
 # results: 
 # rung 3. pop 20, spacing 1*L, gens 200, fit last.
-def train(filename=None):
+def train(filename=None, play_paused=False):
     
     expid = 'exp_' + datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     print(f'Experiment {expid}')
@@ -135,7 +137,7 @@ def train(filename=None):
         L=L, # leg length
         R=L / 5, # leg radius
         S=L / 2, # body radius
-        num_legs=5,
+        num_legs=6,
         num_hidden=3, # 6
         num_hl=0, # number of hidden layers
         # ladder
@@ -151,6 +153,21 @@ def train(filename=None):
         stair_thickness=L / 2.5,
         stair_angle=np.pi / 2 / 3.8,
         stair_y_offset=L * 2,
+        # angled ladder
+        ladder_num_rungs=20,
+        ladder_angle=np.pi / 2 / 4,
+        ladder_width=L * 20,
+        ladder_thickness=L / 5,
+        ladder_y_offset=L * 2,
+        ladder_spacing=L,
+        # angled lattice
+        lat_num_rungs=20,
+        lat_num_rails=10,
+        lat_rung_spacing=L,
+        lat_rail_spacing=L,
+        lat_thickness=L / 5,
+        lat_angle=np.pi / 2 / 4,
+        lat_y_offset=L * 2,
         # Evolutionary Strategy
 #         strategy='phc',
 #         strategy='ga',
@@ -160,12 +177,13 @@ def train(filename=None):
 #         mutation='evorobo', # change one random param, sigma=param
         mutation='noise', # change all params, sigma~=hp.sigma_init*(sigma_decay**generation)
         elite_ratio=0.2,
+#         eval_time=200, # number of timesteps
         eval_time=2000, # number of timesteps
         pop_size=64, # population size
-#         pop_size=256, # population size
+#         pop_size=10, # population size
         max_parallel=32, # max num sims to run simultaneously
-#         num_gens=100, # number of generations
-        num_gens=1000,
+        num_gens=1000, # number of generations
+#         num_gens=1,
         sigma_init=0.1,
 #         num_envs=4, # number of environments each individual will be evaluated in
     )
@@ -180,10 +198,15 @@ def train(filename=None):
     print(f'legs: {hp.num_legs}, hidden units: {hp.num_hidden}, hidden layers: {hp.num_hl}, params: {hp.num_params}')
     
 #     env = PhototaxisEnv(id_=1, L=hp.L)
-    env = StairsEnv(num_stairs=hp.num_stairs, 
-                    depth=hp.stair_depth, width=hp.stair_width, thickness=hp.stair_thickness,
-                    angle=hp.stair_angle, y_offset=hp.stair_y_offset)
+#     env = StairsEnv(num_stairs=hp.num_stairs, 
+#                     depth=hp.stair_depth, width=hp.stair_width, thickness=hp.stair_thickness,
+#                     angle=hp.stair_angle, y_offset=hp.stair_y_offset)
 #     env = LadderEnv(length=hp.length, width=hp.width, thickness=hp.thickness, spacing=hp.spacing, y_offset=hp.y_offset)
+#     env = AngledLadderEnv(num_rungs=hp.ladder_num_rungs, spacing=hp.ladder_spacing, width=hp.ladder_width,
+#                           thickness=hp.ladder_thickness, angle=hp.ladder_angle, y_offset=hp.ladder_y_offset)
+    env = AngledLatticeEnv(num_rungs=hp.lat_num_rungs, num_rails=hp.lat_num_rails, 
+                           rung_spacing=hp.lat_rung_spacing, rail_spacing=hp.lat_rail_spacing, 
+                           thickness=hp.lat_thickness, angle=hp.lat_angle, y_offset=hp.lat_y_offset)
     evaluator = Evaluator(hp.num_legs, hp.L, hp.R, hp.S, hp.eval_time, env, hp.num_hidden, hp.num_hl, hp.max_parallel)
     
     if filename is not None:
@@ -191,7 +214,6 @@ def train(filename=None):
         solutions = np.tile(params, (hp.pop_size, 1))
     else:
         solutions = None
-    
     
     # defines genetic algorithm solver
     if hp.strategy == 'ga':
@@ -215,12 +237,12 @@ def train(filename=None):
     print('history:', history)
     params = solver.result()[0]
     solutions = np.expand_dims(params, axis=0)
-    fits = evaluator(solutions, play_blind=False, play_paused=False)    
+    fits = evaluator(solutions, play_blind=False, play_paused=play_paused)    
     save_model('robot.pkl', hp, params, evaluator)
     save_model(f'experiments/{expid}_robot.pkl', hp, params, evaluator)
     
     
-def play(filename=None):
+def play(filename=None, play_paused=False):
     if filename is None:
         filename = 'robot.pkl'
         
@@ -230,7 +252,7 @@ def play(filename=None):
 #     evaluator.env.num_stairs = 10
     if not hasattr(evaluator, 'max_parallel'):
         evaluator.max_parallel = None
-    evaluator(solutions, play_blind=False, play_paused=False)
+    evaluator(solutions, play_blind=False, play_paused=play_paused)
     
     
 def save_model(filename, hp, params, evaluator):
@@ -249,6 +271,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='train and evaluate')
     parser.add_argument('action', choices=['train', 'play'], default='train')
     parser.add_argument('--restore', metavar='FILENAME', help='load and use a saved model')
+    parser.add_argument('--play-paused', default=False, action='store_true')
     args = parser.parse_args()
     
     print('restore filename:', args.restore)
@@ -258,7 +281,7 @@ if __name__ == '__main__':
     if args.action == 'train':
         for i in range(1):
             print(f'experiment # {i}')
-            train(args.restore)
+            train(args.restore, play_paused=args.play_paused)
     elif args.action == 'play':
-        play(args.restore)
+        play(args.restore, play_paused=args.play_paused)
         

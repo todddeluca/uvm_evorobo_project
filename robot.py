@@ -79,6 +79,10 @@ class Robot:
             
     def send_sensors(self, sim, body, upper_legs, lower_legs):
         sensors = []
+        
+        # front leg ray sensors
+        # ...todo
+        
         # lower limb touch sensors
         for lower in lower_legs:
             sensors.append(sim.send_touch_sensor(body_id=lower))
