@@ -91,7 +91,7 @@ class AFPO:
     '''
     def __init__(self, num_params, pop_size, 
                  sigma_init=0.1, sigma_decay=0.999, sigma_limit=0.01, 
-                 seed=None, sols=None):
+                 seed=None, sols=None, lineage=None):
         self.seed = seed
         self.num_params = num_params
         self.pop_size = pop_size
@@ -101,6 +101,11 @@ class AFPO:
         self.gens = 0 # current generation
         self.sigma = self.sigma_init
         
+        if lineage is None:
+            self.lineage = np.arange(self.pop_size)
+        else:
+            self.lineage = lineage
+            
         if sols is None:
             self.sols = np.random.randn(self.pop_size, self.num_params) * self.sigma
         else:
@@ -110,45 +115,53 @@ class AFPO:
         self.best_params = None
         self.best_age = None
         self.best_fit = None
+        
+        self.first_iteration = True # There's a first time for everything
 
     def ask(self):
-        return self.sols
-    
-    def tell(self, fits):        
-        pop_idx = np.arange(self.pop_size) # numerical index of population
-        
+        if self.first_iteration:
+            self.first_iteration = False
+            return self.sols
+
+        pop_idx = np.arange(self.pop_size) # numerical index of population        
         # age the population
         self.ages += 1
-        
-        # find pareto front
-        front_idx = self.pareto_front(self.ages, fits)
-        print('front size:', len(front_idx), 'front ages:', self.ages[front_idx])
-        
-        # track the fittest individual
-        best_idx = front_idx[fits[front_idx].argmax()]
-        self.best_params = self.sols[best_idx]
-        self.best_age = self.ages[best_idx]
-        self.best_fit = fits[best_idx]
-        
-        # discard indivs not on the pareto front
-        discard_idx = pop_idx[np.isin(pop_idx, front_idx, invert=True)]
-        # discard at least one individual per generation
-        if len(discard_idx) == 0:
-            # choose an indiv at random to discard (excepting the fittest)
-            discard_idx = np.random.choice(pop_idx[pop_idx != best_idx], size=1)
 
+        # discard indivs not on the pareto front
+        self.discard_idx = pop_idx[np.isin(pop_idx, self.front_idx, invert=True)]
+        # discard at least one individual per generation
+        if len(self.discard_idx) == 0:
+            # choose an indiv at random to discard (excepting the fittest)
+            self.discard_idx = np.random.choice(pop_idx[pop_idx != self.best_idx], size=1)
+        
+        # decay sigma
         if self.sigma > self.sigma_limit:
             self.sigma = max(self.sigma_limit, self.sigma * self.sigma_decay)
 
-        # create new indivs
-        # create one new individual
-        self.sols[discard_idx[0]] = np.random.randn(self.num_params) * self.sigma
-        self.ages[discard_idx[0]] = 0
-        # create other individuals derived from the front
-        for idx in discard_idx[1:]:
-            parent_idx = np.random.choice(front_idx)
+        # create one brand new individual
+        self.sols[self.discard_idx[0]] = np.random.randn(self.num_params) * self.sigma
+        self.ages[self.discard_idx[0]] = 0
+        self.lineage[self.discard_idx[0]] = np.amax(self.lineage) + 1 # yay new species
+        # create descendents of the front
+        for idx in self.discard_idx[1:]:
+            parent_idx = np.random.choice(self.front_idx)
             self.sols[idx] = self.sols[parent_idx] + np.random.randn(self.num_params) * self.sigma
             self.ages[idx] = self.ages[parent_idx]
+            self.lineage[idx] = self.lineage[parent_idx] # descendant
+
+        
+        return self.sols
+    
+    def tell(self, fits): 
+        
+        self.fits = fits
+        # find pareto front
+        self.front_idx = self.pareto_front(self.ages, self.fits)
+        # track the fittest individual
+        self.best_idx = self.front_idx[self.fits[self.front_idx].argmax()]
+        self.best_params = self.sols[self.best_idx]
+        self.best_age = self.ages[self.best_idx]
+        self.best_fit = self.fits[self.best_idx]
             
     def result(self):
         return (self.best_params, self.best_fit, self.best_age)

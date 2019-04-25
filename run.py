@@ -8,6 +8,8 @@ import math
 import numpy as np
 import pickle
 import random
+import pprint
+
 import pyrosim
 import es # from es import SimpleGA, CMAES, PEPG, OpenES
 
@@ -16,12 +18,16 @@ from environment import LadderEnv, StairsEnv, PhototaxisEnv, AngledLadderEnv, An
 from strategy import ParallelHillClimber, AFPO
 
 
-class Hyperparams:
+class Hyperparam:
     '''Dummy class for accessing hyperparams as attributes. Instead of using a dict.'''
     def __init__(self, **kwargs):
         for key in kwargs:
             setattr(self, key, kwargs[key])
 
+
+# class Hyperparameters(dict):
+#     def translate(self, **kwargs):
+#         return Hyperparameters([(new_key, self[old_key]) for new_key, old_key in kwargs.items()])
 
 
 class Individual:  
@@ -86,7 +92,7 @@ class Evaluator:
     '''
     A configurable fitness function that evaluates a population of solutions.
     '''
-    def __init__(self, num_legs, L, R, S, eval_time, env, num_hidden, num_hl, max_parallel=None):
+    def __init__(self, num_legs, L, R, S, eval_time, env, num_hidden, num_hl, max_parallel=None, **kwargs):
         '''
         max_parallel: run up to max_parallel simulations simultaneously. If none, run all simulations 
         simultaneously. (My puny laptop struggles w/ >40).
@@ -126,23 +132,22 @@ class Evaluator:
                 fitnesses[start_i + i] = indiv.compute_fitness()
 
         return fitnesses
-        
 
 
-# results: 
-# rung 3. pop 20, spacing 1*L, gens 200, fit last.
-def train(filename=None, play_paused=False):
-    
-    expid = 'exp_' + datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    print(f'Experiment {expid}')
-    # hyperparameter configuration
+def make_hyperparameters():
+    '''
+    return a dictionary of the experiment hyperparameters
+    '''
+    exp_id = 'exp_' + datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     L = 0.1
-    hp = Hyperparams(
+    hp = dict(
+        exp_id=exp_id, # experiment id
+        checkpoint_step=100,
         # robot
         L=L, # leg length
         R=L / 5, # leg radius
         S=L / 2, # body radius
-        num_legs=6,
+        num_legs=8,
         num_hidden=3, # 6
         num_hl=0, # number of hidden layers
         # ladder
@@ -167,9 +172,9 @@ def train(filename=None, play_paused=False):
         ladder_spacing=L,
         # angled lattice
         lat_num_rungs=20,
-        lat_num_rails=80,
+        lat_num_rails=2, # 80,
         lat_rung_spacing=L,
-        lat_rail_spacing=L,
+        lat_rail_spacing=L * 80,
         lat_thickness=L / 5,
         lat_angle=np.pi / 2 / 4,
         lat_y_offset=L * 2,
@@ -193,58 +198,107 @@ def train(filename=None, play_paused=False):
 #         num_envs=4, # number of environments each individual will be evaluated in
     )
     
+    # hyperparameter configuration
     # calculate number of params
     # make a list of nodes in each layer and calculate the weights between the layers
     # node counts are (num touch sensors + light sensor + bias + vestibular sensor), (num hidden nodes + bias), (num joints) 
 #     nodes = np.array([hp.num_legs + 3] + [hp.num_hidden + 1] * hp.num_hl + [hp.num_legs * 2])
     # node counts are (num touch sensors + bias), (num hidden nodes + bias), (num joints) 
-    nodes = np.array([hp.num_legs + 1] + [hp.num_hidden + 1] * hp.num_hl + [hp.num_legs * 2])
-    hp.num_params = (nodes[:-1] * nodes[1:]).sum()        
-    print(f'legs: {hp.num_legs}, hidden units: {hp.num_hidden}, hidden layers: {hp.num_hl}, params: {hp.num_params}')
-    
-#     env = PhototaxisEnv(id_=1, L=hp.L)
-#     env = StairsEnv(num_stairs=hp.num_stairs, 
-#                     depth=hp.stair_depth, width=hp.stair_width, thickness=hp.stair_thickness,
-#                     angle=hp.stair_angle, y_offset=hp.stair_y_offset)
-#     env = LadderEnv(length=hp.length, width=hp.width, thickness=hp.thickness, spacing=hp.spacing, y_offset=hp.y_offset)
-#     env = AngledLadderEnv(num_rungs=hp.ladder_num_rungs, spacing=hp.ladder_spacing, width=hp.ladder_width,
-#                           thickness=hp.ladder_thickness, angle=hp.ladder_angle, y_offset=hp.ladder_y_offset)
-    env = AngledLatticeEnv(num_rungs=hp.lat_num_rungs, num_rails=hp.lat_num_rails, 
-                           rung_spacing=hp.lat_rung_spacing, rail_spacing=hp.lat_rail_spacing, 
-                           thickness=hp.lat_thickness, angle=hp.lat_angle, y_offset=hp.lat_y_offset)
-    evaluator = Evaluator(hp.num_legs, hp.L, hp.R, hp.S, hp.eval_time, env, hp.num_hidden, hp.num_hl, hp.max_parallel)
-    
-    if filename is not None:
-        hp_unused, params, evaluator_unused = load_model(filename)
-        solutions = np.tile(params, (hp.pop_size, 1))
-    else:
-        solutions = None
-    
-    # defines genetic algorithm solver
-    if hp.strategy == 'ga':
-        solver = es.SimpleGA(hp.num_params, sigma_init=hp.sigma_init, popsize=hp.pop_size, elite_ratio=hp.elite_ratio, forget_best=False, weight_decay=hp.decay)
-    elif hp.strategy == 'afpo':
-        solver = AFPO(hp.num_params, hp.pop_size, sigma_init=hp.sigma_init, sols=solutions)    
-    elif hp.strategy == 'cmaes':
-        solver = es.CMAES(hp.num_params, popsize=hp.pop_size, weight_decay=hp.decay, sigma_init=hp.sigma_init)    
-    elif hp.strategy == 'phc':
-        solver = ParallelHillClimber(hp.num_params, hp.pop_size, sigma_init=hp.sigma_init, mutation=hp.mutation)
+    nodes = np.array([hp['num_legs'] + 1] + [hp['num_hidden'] + 1] * hp['num_hl'] + [hp['num_legs'] * 2])
+    hp['num_params'] = (nodes[:-1] * nodes[1:]).sum()        
+    return hp
 
-    history = []
-    for i in range(hp.num_gens):
+    
+def train(filename=None, play_paused=False):
+
+    # case 1: load full model and resume training
+    # case 2: create new model and start training
+    # case 3: not implemented. load model and use new hp, env, etc.
+
+    # load model
+    if filename is not None:
+        hp, params, evaluator, solver, history, state = load_model(filename)
+    else:
+        hp = make_hyperparameters()
+        state = {} # training state. Used to restore training and save training history.
+    
+#         env = PhototaxisEnv(id_=1, L=hp.L)
+#         env = StairsEnv(num_stairs=hp.num_stairs, 
+#                         depth=hp.stair_depth, width=hp.stair_width, thickness=hp.stair_thickness,
+#                         angle=hp.stair_angle, y_offset=hp.stair_y_offset)
+#         env = LadderEnv(length=hp.length, width=hp.width, thickness=hp.thickness, spacing=hp.spacing, y_offset=hp.y_offset)
+#         env = AngledLadderEnv(num_rungs=hp.ladder_num_rungs, spacing=hp.ladder_spacing, width=hp.ladder_width,
+#                               thickness=hp.ladder_thickness, angle=hp.ladder_angle, y_offset=hp.ladder_y_offset)
+        env = AngledLatticeEnv(num_rungs=hp['lat_num_rungs'], num_rails=hp['lat_num_rails'], 
+                               rung_spacing=hp['lat_rung_spacing'], rail_spacing=hp['lat_rail_spacing'], 
+                               thickness=hp['lat_thickness'], angle=hp['lat_angle'], y_offset=hp['lat_y_offset'])
+        evaluator = Evaluator(env=env, **hp)
+        state['env'] = copy.deepcopy(env)
+        state['evaluator'] = copy.deepcopy(evaluator)
+        state['history'] = []
+        state['gen'] = -1
+        
+        # defines genetic algorithm solver
+        if hp['strategy'] == 'ga':
+            solver = es.SimpleGA(hp['num_params'], sigma_init=hp['sigma_init'], 
+                                 popsize=hp['pop_size'], elite_ratio=hp['elite_ratio'], 
+                                 forget_best=False, weight_decay=hp['decay'])
+        elif hp['strategy'] == 'afpo':
+            solver = AFPO(hp['num_params'], hp['pop_size'], sigma_init=hp['sigma_init'], sols=solutions)    
+        elif hp['strategy'] == 'cmaes':
+            solver = es.CMAES(hp['num_params'], popsize=hp['pop_size'], weight_decay=hp['decay'], sigma_init=hp['sigma_init'])    
+        elif hp['strategy'] == 'phc':
+            solver = ParallelHillClimber(hp['num_params'], hp['pop_size'], sigma_init=hp['sigma_init'], mutation=hp['mutation'])
+
+#         state['solver'] = solver
+#         solutions = np.tile(params, (hp['pop_size'], 1))
+#     else:
+#         solutions = None
+    
+
+    print('Experiment', hp["exp_id"])
+    print('legs:', hp["num_legs"], 'hidden units:', hp["num_hidden"], 
+          'hidden layers:', hp["num_hl"], 'params:', hp["num_params"])
+    
+    env = copy.deepcopy(state['env'])
+    evaluator = copy.deepcopy(state['evaluator'])
+#     solver = copy.deepcopy(state['solver'])
+        
+    # start or restart evolution
+    for gen in range(state['gen'] + 1, hp['num_gens']):
+        state['gen'] = gen
+        story = {'gen': gen} # track history
         solutions = solver.ask() # shape: (pop_size, num_params)
         fitnesses = evaluator(solutions, play_blind=True, play_paused=False)
+        story['fitnesses'] = copy.deepcopy(fitnesses)
         solver.tell(fitnesses)
-        print(f'gen: {i} fitnesses: {np.sort(fitnesses)[::-1]}')
+        print(f'gen: {gen} fitnesses: {np.sort(fitnesses)[::-1]}')
         result = solver.result() # first element is the best solution, second element is the best fitness
-        history.append(result[1])
+#         story['result'] = copy.deepcopy(result) # heavy b/c of params
+        for attr in ['fits', 'ages', 'lineage', 'front_idx', 'best_idx', 'best_age', 'best_fit', 'sigma']: # AFPO
+            if hasattr(solver, attr):
+                story[attr] = copy.deepcopy(getattr(solver, attr))
+                
+        print('front size:', len(story['front_idx']))
+        print('front ages:', story['ages'][story['front_idx']])
+        print('front fits:', story['fits'][story['front_idx']])
+        print('front lineage:', story['lineage'][story['front_idx']])
+        print('front_idx:', story['front_idx'])
+        story['result_fitness'] = copy.deepcopy(result[1])
+        state['history'].append(story)
+        if hp['checkpoint_step'] is not None and (gen + 1) % hp['checkpoint_step'] == 0:
+            print('Saving checkpoint at gen', gen)
+            params = solver.result()[0]
+            save_model('robot.pkl', hp, params, evaluator, solver, state['history'], state)
+            save_model('experiments/' + hp['exp_id'] + '_robot.pkl', hp, params, evaluator, solver, state['history'], state)
     
-    print('history:', history)
+    print('state:')
+    pprint.pprint(state)
     params = solver.result()[0]
     solutions = np.expand_dims(params, axis=0)
     fits = evaluator(solutions, play_blind=False, play_paused=play_paused)    
-    save_model('robot.pkl', hp, params, evaluator, solver)
-    save_model(f'experiments/{expid}_robot.pkl', hp, params, evaluator, solver)
+    save_model('robot.pkl', hp, params, evaluator, solver, state['history'], state)
+    save_model('experiments/' + hp['exp_id'] + '_robot.pkl', hp, params, evaluator, solver, state['history'], state)
     
     
 def play(filename=None, play_paused=False):
@@ -258,9 +312,14 @@ def play(filename=None, play_paused=False):
     if not hasattr(evaluator, 'max_parallel'):
         evaluator.max_parallel = None
         
-    for attr in dir(hp):
-        if not attr.startswith('_'):
-            print(f'{attr}: {getattr(hp, attr)}')
+    # print hyperparams
+    if isinstance(hp, Hyperparam):
+        for attr in dir(hp):
+            if not attr.startswith('_'):
+                print(f'{attr}: {getattr(hp, attr)}')  
+    else:
+        for k, v in hp.items():
+            print(k, ':', v)
 
     evaluator(solutions, play_blind=False, play_paused=play_paused)
     
@@ -285,12 +344,12 @@ if __name__ == '__main__':
     args = parser.parse_args()
     
     print('restore filename:', args.restore)
-    if args.restore is not None:
-        hp, params, evaluator = load_model(args.restore)
+#     if args.restore is not None:
+#         hp, params, evaluator = load_model(args.restore)
         
     if args.action == 'train':
         for i in range(1):
-            print(f'experiment # {i}')
+            print(f'experiment #{i}')
             train(args.restore, play_paused=args.play_paused)
     elif args.action == 'play':
         play(args.restore, play_paused=args.play_paused)
