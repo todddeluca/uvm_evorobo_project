@@ -25,7 +25,8 @@ upper to lower leg joint: x=(S+L)*cos(theta), y=(S+L)*sin(theta), z=L+R, n1=-sin
 '''
 
 class Robot:
-    def __init__(self, sim, weights, num_legs=4, L=1, R=1, S=1, num_hidden=4, num_hidden_layers=0):
+    def __init__(self, sim, weights, num_legs=4, L=1, R=1, S=1, num_hidden=4, num_hidden_layers=0,
+                 use_proprio=False, use_vestib=False):
         '''
         L: leg length
         R: leg radius
@@ -33,7 +34,8 @@ class Robot:
         '''
         self.group = 'robot'
         body, upper_legs, lower_legs, joints = self.send_objects_and_joints(sim, num_legs, L, R, S)
-        sensors, p4, l5, vid = self.send_sensors(sim, body, upper_legs, lower_legs)
+        sensors, p4, l5, vid = self.send_sensors(sim, body, upper_legs, lower_legs, joints,
+                                                 use_proprio=use_proprio, use_vestib=use_vestib)
         self.p4 = p4
         self.l5 = l5
         self.v_id = vid # vestibular sensor
@@ -77,9 +79,13 @@ class Robot:
 
         return o0, upper_legs, lower_legs, joints
             
-    def send_sensors(self, sim, body, upper_legs, lower_legs):
+    def send_sensors(self, sim, body, upper_legs, lower_legs, joints, use_proprio=False, use_vestib=False):
         sensors = []
         
+        if use_proprio:
+            for joint in joints:
+                sensors.append(sim.send_proprioceptive_sensor(joint))
+            
         # front leg ray sensors
         # ...todo
         
@@ -95,7 +101,8 @@ class Robot:
         l5 = sim.send_light_sensor(body_id=body)
 #         sensors.append(l5)
         vid = sim.send_vestibular_sensor(body_id=body)
-#         sensors.append(vid)
+        if use_vestib:
+            sensors.append(vid)
         
         return sensors, p4, l5, vid
 

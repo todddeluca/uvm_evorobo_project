@@ -31,7 +31,8 @@ class Hyperparam:
 
 
 class Individual:  
-    def __init__(self, id_, genome, num_legs, L, R, S, eval_time, num_hidden, num_hl):
+    def __init__(self, id_, genome, num_legs, L, R, S, eval_time, num_hidden, num_hl, 
+                 use_proprio=False, use_vestib=False):
         self.num_legs = num_legs
         self.L = L
         self.R = R
@@ -42,6 +43,8 @@ class Individual:
         self.id_ = id_
         self.num_hidden = num_hidden
         self.num_hl = num_hl
+        self.use_proprio = use_proprio
+        self.use_vestib = use_vestib
         
     def start_evaluation(self, env, play_blind=True, play_paused=False):
         self.env = env # save for fitness
@@ -50,7 +53,8 @@ class Individual:
         self.tids = env.send_to(self.sim)
         robot = Robot(self.sim, weights=self.genome, num_legs=self.num_legs,
                       L=self.L, R=self.R, S=self.S, num_hidden=self.num_hidden, 
-                      num_hidden_layers=self.num_hl)
+                      num_hidden_layers=self.num_hl, 
+                      use_proprio=self.use_proprio, use_vestib=self.use_vestib)
         self.position_sensor_id = robot.p4
         self.distance_sensor_id = robot.l5 # distance from light source
         self.v_id = robot.v_id # body vestibular sensor
@@ -92,7 +96,8 @@ class Evaluator:
     '''
     A configurable fitness function that evaluates a population of solutions.
     '''
-    def __init__(self, num_legs, L, R, S, eval_time, env, num_hidden, num_hl, max_parallel=None, **kwargs):
+    def __init__(self, num_legs, L, R, S, eval_time, env, num_hidden, num_hl, max_parallel=None,
+                 use_proprio=False, use_vestib=False, **kwargs):
         '''
         max_parallel: run up to max_parallel simulations simultaneously. If none, run all simulations 
         simultaneously. (My puny laptop struggles w/ >40).
@@ -106,11 +111,21 @@ class Evaluator:
         self.num_hidden = num_hidden
         self.num_hl = num_hl
         self.max_parallel = max_parallel
+        self.use_proprio = use_proprio
+        self.use_vestib = use_vestib
         
     def __call__(self, solutions, play_blind=True, play_paused=False):
         '''
         solutions: 2d array of params: (pop_size, num_params)
         '''
+        # for backwards compatibility with saved evaluators missing these attributes
+        if not hasattr(self, 'num_hl'):
+            self.num_hl = 0
+        if not hasattr(self, 'use_proprio'):
+            self.use_proprio = False
+        if not hasattr(self, 'use_vestib'):
+            self.use_vestib = False
+
         fitnesses = np.zeros(len(solutions)) # fitnesses
         
         # process solutions in batches of size batch_size
@@ -119,10 +134,9 @@ class Evaluator:
             indivs = []
             for i in range(start_i, min(start_i + batch_size, len(solutions))):
                 genome = solutions[i]
-                if not hasattr(self, 'num_hl'):
-                    self.num_hl = 0
                 indiv = Individual(i, genome, self.num_legs, self.L, self.R, self.S, self.eval_time,
-                                   self.num_hidden, self.num_hl)
+                                   self.num_hidden, self.num_hl, 
+                                   use_proprio=self.use_proprio, use_vestib=self.use_vestib)
                 indivs.append(indiv)
 
             for indiv in indivs:
@@ -141,22 +155,25 @@ def make_hyperparameters():
     exp_id = 'exp_' + datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     L = 0.1
     hp = dict(
+        # experiment
         exp_id=exp_id, # experiment id
         checkpoint_step=100,
         # robot
         L=L, # leg length
         R=L / 5, # leg radius
         S=L / 2, # body radius
-        num_legs=8,
+        num_legs=6,
         num_hidden=3, # 6
         num_hl=0, # number of hidden layers
+        use_proprio=True,
+        use_vestib=True,
         # ladder
         length=L * 10,
         width=L * 5,
         thickness=L / 5,
         spacing=1 * L, 
         y_offset=L * 5,
-        # stairs
+        # angled stairs
         num_stairs=20,
         stair_width=L * 80,
         stair_depth=L, # when angle=pi/2, depth == rung spacing
@@ -176,13 +193,14 @@ def make_hyperparameters():
         lat_rung_spacing=L,
         lat_rail_spacing=L * 80,
         lat_thickness=L / 5,
-        lat_angle=np.pi / 2 / 4,
+        lat_angle=np.pi / 4, # np.pi / 16, # np.pi / 2 / 4,
         lat_y_offset=L * 2,
-        # Evolutionary Strategy
+        # Evolution Strategy
 #         strategy='phc',
 #         strategy='ga',
         strategy='afpo',
 #         strategy='cmaes',
+        num_novel=4, # 1, # number of new lineages per generation (AFPO)
         decay=0.0000, # weight decay
 #         mutation='evorobo', # change one random param, sigma=param
         mutation='noise', # change all params, sigma~=hp.sigma_init*(sigma_decay**generation)
@@ -191,9 +209,14 @@ def make_hyperparameters():
         eval_time=2000, # number of timesteps
         pop_size=64, # population size
 #         pop_size=10, # population size
-        max_parallel=32, # max num sims to run simultaneously
+        # 2 = ~28-29 sec
+        # 4 = ~24-27 sec
+        # 8 = ~24
+        # 16 = ~25
+        # 32 = ~24-25
+        max_parallel=8, # 32, # max num sims to run simultaneously
         num_gens=1000, # number of generations
-#         num_gens=1,
+#         num_gens=5,
         sigma_init=0.1,
 #         num_envs=4, # number of environments each individual will be evaluated in
     )
@@ -201,10 +224,10 @@ def make_hyperparameters():
     # hyperparameter configuration
     # calculate number of params
     # make a list of nodes in each layer and calculate the weights between the layers
-    # node counts are (num touch sensors + light sensor + bias + vestibular sensor), (num hidden nodes + bias), (num joints) 
-#     nodes = np.array([hp.num_legs + 3] + [hp.num_hidden + 1] * hp.num_hl + [hp.num_legs * 2])
-    # node counts are (num touch sensors + bias), (num hidden nodes + bias), (num joints) 
-    nodes = np.array([hp['num_legs'] + 1] + [hp['num_hidden'] + 1] * hp['num_hl'] + [hp['num_legs'] * 2])
+    # input node count: proprioceptive sensors + touch sensors + vestigial sensor + bias
+    # hidden node count: hidden nodes + bias
+    # output node count: joints/motors
+    nodes = np.array([3 * hp['num_legs'] + 2] + [hp['num_hidden'] + 1] * hp['num_hl'] + [hp['num_legs'] * 2])
     hp['num_params'] = (nodes[:-1] * nodes[1:]).sum()        
     return hp
 
@@ -239,21 +262,22 @@ def train(filename=None, play_paused=False):
         state['gen'] = -1
         
         # defines genetic algorithm solver
+        if False: # initialize population from best params
+            solutions = np.tile(params, (hp['pop_size'], 1))
+        else:
+            solutions = None
         if hp['strategy'] == 'ga':
             solver = es.SimpleGA(hp['num_params'], sigma_init=hp['sigma_init'], 
                                  popsize=hp['pop_size'], elite_ratio=hp['elite_ratio'], 
                                  forget_best=False, weight_decay=hp['decay'])
         elif hp['strategy'] == 'afpo':
-            solver = AFPO(hp['num_params'], hp['pop_size'], sigma_init=hp['sigma_init'], sols=solutions)    
+            solver = AFPO(hp['num_params'], hp['pop_size'], sigma_init=hp['sigma_init'], sols=solutions, 
+                          num_novel=hp['num_novel'])
         elif hp['strategy'] == 'cmaes':
             solver = es.CMAES(hp['num_params'], popsize=hp['pop_size'], weight_decay=hp['decay'], sigma_init=hp['sigma_init'])    
         elif hp['strategy'] == 'phc':
             solver = ParallelHillClimber(hp['num_params'], hp['pop_size'], sigma_init=hp['sigma_init'], mutation=hp['mutation'])
 
-#         state['solver'] = solver
-#         solutions = np.tile(params, (hp['pop_size'], 1))
-#     else:
-#         solutions = None
     
 
     print('Experiment', hp["exp_id"])
@@ -266,15 +290,17 @@ def train(filename=None, play_paused=False):
         
     # start or restart evolution
     for gen in range(state['gen'] + 1, hp['num_gens']):
+        gen_start_time = datetime.datetime.now()
         state['gen'] = gen
         story = {'gen': gen} # track history
         solutions = solver.ask() # shape: (pop_size, num_params)
         fitnesses = evaluator(solutions, play_blind=True, play_paused=False)
         story['fitnesses'] = copy.deepcopy(fitnesses)
         solver.tell(fitnesses)
-        print(f'gen: {gen} fitnesses: {np.sort(fitnesses)[::-1]}')
+        print(f'============\ngen: {gen}')
+        print(f'fitnesses: {np.sort(fitnesses)[::-1]}')
         result = solver.result() # first element is the best solution, second element is the best fitness
-#         story['result'] = copy.deepcopy(result) # heavy b/c of params
+        story['result'] = copy.deepcopy(result) # too heavy b/c of params?
         for attr in ['fits', 'ages', 'lineage', 'front_idx', 'best_idx', 'best_age', 'best_fit', 'sigma']: # AFPO
             if hasattr(solver, attr):
                 story[attr] = copy.deepcopy(getattr(solver, attr))
@@ -284,6 +310,10 @@ def train(filename=None, play_paused=False):
         print('front fits:', story['fits'][story['front_idx']])
         print('front lineage:', story['lineage'][story['front_idx']])
         print('front_idx:', story['front_idx'])
+        gen_end_time = datetime.datetime.now()
+        gen_time = gen_end_time - gen_start_time
+        story['gen_time'] = gen_time
+        print('gen_time:', gen_time)
         story['result_fitness'] = copy.deepcopy(result[1])
         state['history'].append(story)
         if hp['checkpoint_step'] is not None and (gen + 1) % hp['checkpoint_step'] == 0:

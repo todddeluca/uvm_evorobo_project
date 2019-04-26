@@ -91,7 +91,10 @@ class AFPO:
     '''
     def __init__(self, num_params, pop_size, 
                  sigma_init=0.1, sigma_decay=0.999, sigma_limit=0.01, 
-                 seed=None, sols=None, lineage=None):
+                 seed=None, sols=None, lineage=None, num_novel=1):
+        '''
+        num_novel: number of new lineages per generation
+        '''
         self.seed = seed
         self.num_params = num_params
         self.pop_size = pop_size
@@ -100,6 +103,7 @@ class AFPO:
         self.sigma_limit = sigma_limit
         self.gens = 0 # current generation
         self.sigma = self.sigma_init
+        self.num_novel = num_novel
         
         if lineage is None:
             self.lineage = np.arange(self.pop_size)
@@ -129,27 +133,36 @@ class AFPO:
 
         # discard indivs not on the pareto front
         self.discard_idx = pop_idx[np.isin(pop_idx, self.front_idx, invert=True)]
-        # discard at least one individual per generation
-        if len(self.discard_idx) == 0:
-            # choose an indiv at random to discard (excepting the fittest)
-            self.discard_idx = np.random.choice(pop_idx[pop_idx != self.best_idx], size=1)
+        # discard at least num_novel individuals per generation
+        # This rarely happens for a sufficiently large population and small num_novel
+        if len(self.discard_idx) < self.num_novel:
+            # number of extra individuals to discard
+            num_more = self.num_novel - len(self.discard_idx)
+            # choose indivs at random to discard (excepting the fittest and already discarded)
+            more_to_discard_idx = np.random.choice(
+                pop_idx[(pop_idx != self.best_idx) & np.isin(pop_idx, self.discard_idx, invert=True)], 
+                size=num_more, 
+                replace=False)
+            self.discard_idx = np.concatenate([self.discard_idx, more_to_discard_idx])
         
         # decay sigma
         if self.sigma > self.sigma_limit:
             self.sigma = max(self.sigma_limit, self.sigma * self.sigma_decay)
 
-        # create one brand new individual
-        self.sols[self.discard_idx[0]] = np.random.randn(self.num_params) * self.sigma
-        self.ages[self.discard_idx[0]] = 0
-        self.lineage[self.discard_idx[0]] = np.amax(self.lineage) + 1 # yay new species
+        # create num_novel brand new individuals
+        self.sols[self.discard_idx[:self.num_novel]] = np.random.randn(self.num_novel, self.num_params) * self.sigma
+        self.ages[self.discard_idx[:self.num_novel]] = 0
+        max_lineage = np.amax(self.lineage)
+        self.lineage[self.discard_idx[:self.num_novel]] = np.arange(
+            max_lineage + 1, max_lineage + self.num_novel + 1) # yay new species
+        
         # create descendents of the front
-        for idx in self.discard_idx[1:]:
+        for idx in self.discard_idx[self.num_novel:]:
             parent_idx = np.random.choice(self.front_idx)
             self.sols[idx] = self.sols[parent_idx] + np.random.randn(self.num_params) * self.sigma
             self.ages[idx] = self.ages[parent_idx]
             self.lineage[idx] = self.lineage[parent_idx] # descendant
 
-        
         return self.sols
     
     def tell(self, fits): 
