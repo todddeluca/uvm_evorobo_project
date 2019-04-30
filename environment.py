@@ -3,6 +3,40 @@
 import numpy as np
 
 
+def send_trophy(sim, x, y, z, size, collision_group):
+    '''
+    z: The vertical position on which to place the statue. The bottom of the statue will be placed at z.
+    '''
+    # the trophy
+    r = 254 / 255
+    g = 182 / 255
+    b = 37 / 255
+    base_id = sim.send_box(x=x, 
+                           y=y,
+                           z=z + 0.5 * size,
+                           length=size * 4, width=size * 4, height=size,
+                           r=r, g=g, b=b,
+                           collision_group=collision_group)
+    stem_id = sim.send_cylinder(x=x, 
+                                y=y, 
+                                z=z + 1 * size + size * 2,
+                                r1=0, r2=0, r3=1,
+                                length=size * 4,
+                                radius=size,
+                                capped=False,
+                                r=r, g=g, b=b,
+                                collision_group=collision_group)
+    bowl_id = sim.send_sphere(x=x,
+                              y=y, 
+                              z=z + 1 * size + size * 4 + size * 2,
+                              radius=size * 2,
+                              r=r, g=g, b=b,
+                              collision_group=collision_group)
+    sim.send_light_source(body_id=stem_id)
+    for id in (base_id, stem_id, bowl_id):
+        sim.send_fixed_joint(id, -1)
+
+
 class PhototaxisEnv:
     '''
     Environment for testing Phototaxis by placing a light source block on the ground.
@@ -51,33 +85,31 @@ class StairsEnv:
         self.thick = thickness # stair thickness
         self.group = 'env' # collision group
         self.angle = angle # angle of stairs in radians, from 0 to pi/2
-        self.rise = np.sin(self.angle) * self.depth
-        self.run = np.cos(self.angle) * self.depth
         
     def send_to(self, sim):
+        rise = np.sin(self.angle) * self.depth
+        run = np.cos(self.angle) * self.depth
+        
+        # x, y, z position of each stair
+        stair_coords = [(0, 
+                         self.y_offset + 0.5 * self.depth + i * run,
+                         i * rise + 0.5 * self.thick
+                        ) for i in range(self.num_stairs)]
         stair_ids = []
-        for i in range(self.num_stairs + 1):
-            length = self.depth if i < self.num_stairs else self.thick
-            width = self.width if i < self.num_stairs else self.thick
-            r = 1 if i < self.num_stairs else 254 / 255
-            g = 1 if i < self.num_stairs else 182 / 255
-            b = 1 if i < self.num_stairs else 37 / 255
-            sid = sim.send_box(x=0, 
-                               y=(self.y_offset + 0.5 * self.depth + i * self.run), 
-                               z=(i * self.rise + 0.5 * self.thick),
-#                                r1=0, r2=0, r3=0,
-                               length=length, width=width, height=self.thick,
-                               r=r, g=g, b=b,
+        for x, y, z in stair_coords:
+            sid = sim.send_box(x=x, y=y, z=z, 
+                               length=self.depth, width=self.width, height=self.thick,
+                               r=1, g=1, b=1,
                                collision_group=self.group)
             stair_ids.append(sid)
             
-
         # fix the stairs in place
         for sid in stair_ids:
             sim.send_fixed_joint(sid, -1)
         
-        # last "stair" is the light source
-        sim.send_light_source(body_id=stair_ids[-1])
+        # the trophy is the light source
+        send_trophy(sim, x=0, y=stair_coords[-1][1], z=stair_coords[-1][2] + 0.5 * self.thick,
+                    size=self.thick, collision_group=self.group)
         
         self.x_min = -self.width / 2
         self.x_max = self.width / 2 
@@ -86,7 +118,7 @@ class StairsEnv:
         touch_ids = [sim.send_touch_sensor(body_id=stair_ids[-1])]
         return touch_ids
 
-
+    
 class AngledLatticeEnv:
     '''Constructs a rectangular lattice whose top rung is a light source.'''
     def __init__(self, num_rungs, num_rails, rung_spacing, rail_spacing, thickness, angle, y_offset):
@@ -140,34 +172,8 @@ class AngledLatticeEnv:
             sim.send_fixed_joint(id, -1)
         
         # the trophy
-        r = 254 / 255
-        g = 182 / 255
-        b = 37 / 255
-        base_id = sim.send_box(x=0, 
-                               y=rung_coords[-1][1],
-                               z=rung_coords[-1][2] + 1.5 * self.thick,
-#                                r1=0, r2=0, r3=0,
-                               length=self.thick * 4, width=self.thick * 4, height=self.thick,
-                               r=r, g=g, b=b,
-                               collision_group=self.group)
-        stem_id = sim.send_cylinder(x=0, 
-                                    y=rung_coords[-1][1], 
-                                    z=rung_coords[-1][2] + 2 * self.thick + self.thick * 2,
-                                    r1=0, r2=0, r3=1,
-                                    length=self.thick * 4,
-                                    radius=self.thick,
-                                    capped=False,
-                                    r=r, g=g, b=b,
-                                    collision_group=self.group)
-        bowl_id = sim.send_sphere(x=0,
-                                  y=rung_coords[-1][1], 
-                                  z=rung_coords[-1][2] + 2 * self.thick + self.thick * 4 + self.thick * 2,
-                                  radius=self.thick * 2,
-                                  r=r, g=g, b=b,
-                                  collision_group=self.group)
-        sim.send_light_source(body_id=stem_id)
-        for id in (base_id, stem_id, bowl_id):
-            sim.send_fixed_joint(id, -1)
+        send_trophy(sim, x=0, y=rung_coords[-1][1], z=rung_coords[-1][2] + self.thick,
+                    size=self.thick, collision_group=self.group)
         
         self.x_min = rail_coords[0][0]
         self.x_max = rail_coords[-1][0]

@@ -26,13 +26,18 @@ upper to lower leg joint: x=(S+L)*cos(theta), y=(S+L)*sin(theta), z=L+R, n1=-sin
 
 class Robot:
     def __init__(self, sim, weights, num_legs=4, L=1, R=1, S=1, num_hidden=4, num_hidden_layers=0,
-                 use_proprio=False, use_vestib=False):
+                 use_proprio=False, use_vestib=False, front_angle=0, one_front_leg=False):
         '''
         L: leg length
         R: leg radius
         S: body radius
+        one_front_leg: if True, a single leg faces forward. if False, two legs face forward
+        front_angle: in radians. if 0, the front leg/s are in the positive x direction.
+          if pi/2, the front leg/s face the positive y direction.
         '''
         self.group = 'robot'
+        self.front_angle = front_angle
+        self.one_front_leg = one_front_leg
         body, upper_legs, lower_legs, joints = self.send_objects_and_joints(sim, num_legs, L, R, S)
         sensors, p4, l5, vid = self.send_sensors(sim, body, upper_legs, lower_legs, joints,
                                                  use_proprio=use_proprio, use_vestib=use_vestib)
@@ -50,7 +55,8 @@ class Robot:
         lower_legs = []
         joints = []
         for i in range(num_legs):
-            theta = (2 * np.pi / num_legs) * (i + 0.5) # i=1 central front leg, (i+0.5)=2 symmetric front legs
+            theta = ((2 * np.pi / num_legs) * (i + (0 if self.one_front_leg else 0.5)) # (i+0.5): 2 symmetric front legs
+                     + self.front_angle) # rotate the front to face y direction if pi/2
             upper = sim.send_cylinder(x=(S + 0.5 * L) * np.cos(theta), 
                                     y=(S + 0.5 * L) * np.sin(theta), 
                                     z=(L + R), length=L, radius=R, 

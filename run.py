@@ -32,7 +32,7 @@ class Hyperparam:
 
 class Individual:  
     def __init__(self, id_, genome, num_legs, L, R, S, eval_time, num_hidden, num_hl, 
-                 use_proprio=False, use_vestib=False):
+                 use_proprio=False, use_vestib=False, front_angle=0):
         self.num_legs = num_legs
         self.L = L
         self.R = R
@@ -45,6 +45,7 @@ class Individual:
         self.num_hl = num_hl
         self.use_proprio = use_proprio
         self.use_vestib = use_vestib
+        self.front_angle = front_angle
         
     def start_evaluation(self, env, play_blind=True, play_paused=False):
         self.env = env # save for fitness
@@ -54,7 +55,8 @@ class Individual:
         robot = Robot(self.sim, weights=self.genome, num_legs=self.num_legs,
                       L=self.L, R=self.R, S=self.S, num_hidden=self.num_hidden, 
                       num_hidden_layers=self.num_hl, 
-                      use_proprio=self.use_proprio, use_vestib=self.use_vestib)
+                      use_proprio=self.use_proprio, use_vestib=self.use_vestib,
+                      front_angle=self.front_angle)
         self.position_sensor_id = robot.p4
         self.distance_sensor_id = robot.l5 # distance from light source
         self.v_id = robot.v_id # body vestibular sensor
@@ -97,7 +99,7 @@ class Evaluator:
     A configurable fitness function that evaluates a population of solutions.
     '''
     def __init__(self, num_legs, L, R, S, eval_time, env, num_hidden, num_hl, max_parallel=None,
-                 use_proprio=False, use_vestib=False, **kwargs):
+                 use_proprio=False, use_vestib=False, front_angle=0, **kwargs):
         '''
         max_parallel: run up to max_parallel simulations simultaneously. If none, run all simulations 
         simultaneously. (My puny laptop struggles w/ >40).
@@ -113,6 +115,7 @@ class Evaluator:
         self.max_parallel = max_parallel
         self.use_proprio = use_proprio
         self.use_vestib = use_vestib
+        self.front_angle = front_angle
         
     def __call__(self, solutions, play_blind=True, play_paused=False):
         '''
@@ -125,7 +128,9 @@ class Evaluator:
             self.use_proprio = False
         if not hasattr(self, 'use_vestib'):
             self.use_vestib = False
-
+        if not hasattr(self, 'front_angle'):
+            self.front_angle = 0
+            
         fitnesses = np.zeros(len(solutions)) # fitnesses
         
         # process solutions in batches of size batch_size
@@ -136,7 +141,8 @@ class Evaluator:
                 genome = solutions[i]
                 indiv = Individual(i, genome, self.num_legs, self.L, self.R, self.S, self.eval_time,
                                    self.num_hidden, self.num_hl, 
-                                   use_proprio=self.use_proprio, use_vestib=self.use_vestib)
+                                   use_proprio=self.use_proprio, use_vestib=self.use_vestib,
+                                   front_angle=self.front_angle)
                 indivs.append(indiv)
 
             for indiv in indivs:
@@ -150,7 +156,7 @@ class Evaluator:
 
 def make_hyperparameters():
     '''
-    return a dictionary of the experiment hyperparameters
+    Return a dictionary of the experimental hyperparameters.
     '''
     exp_id = 'exp_' + datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     L = 0.1
@@ -162,27 +168,31 @@ def make_hyperparameters():
         L=L, # leg length
         R=L / 5, # leg radius
         S=L / 2, # body radius
-        num_legs=6,
+        num_legs=5,
         num_hidden=3, # 6
         num_hl=0, # number of hidden layers
         use_proprio=True,
         use_vestib=True,
+        front_angle=np.pi/2, # pi/2 = face the y-direction
+#         obstacle = 'stairs',
+        obstacle = 'angled_lattice',
+#         obstacle = 'angled_ladder',
         # ladder
         length=L * 10,
         width=L * 5,
         thickness=L / 5,
         spacing=1 * L, 
         y_offset=L * 5,
-        # angled stairs
+        # stairs
         num_stairs=20,
         stair_width=L * 80,
         stair_depth=L, # when angle=pi/2, depth == rung spacing
         stair_thickness=L / 2.5,
-        stair_angle=np.pi / 2 / 3.8,
+        stair_angle=np.pi / 8,
         stair_y_offset=L * 2,
         # angled ladder
         ladder_num_rungs=20,
-        ladder_angle=np.pi / 2 / 4,
+        ladder_angle=np.pi / 8,
         ladder_width=L * 80,
         ladder_thickness=L / 5,
         ladder_y_offset=L * 2,
@@ -193,14 +203,19 @@ def make_hyperparameters():
         lat_rung_spacing=L,
         lat_rail_spacing=L * 80,
         lat_thickness=L / 5,
-        lat_angle=np.pi / 4, # np.pi / 16, # np.pi / 2 / 4,
+        lat_angle=np.pi / 3, # np.pi / 16, # np.pi / 2 / 4,
         lat_y_offset=L * 2,
+        # Scaffolding
+#         scaffolding_kind = 'linear',
+        scaffolding_kind = None,
+        scaffolding_initial_angle = 0,
         # Evolution Strategy
 #         strategy='phc',
 #         strategy='ga',
         strategy='afpo',
 #         strategy='cmaes',
-        num_novel=4, # 1, # number of new lineages per generation (AFPO)
+        num_novel=2, # 0, # 1, # 4, # number of new lineages per generation (AFPO)
+#         num_novel=0, # use with pop_size=1 for testing.
         decay=0.0000, # weight decay
 #         mutation='evorobo', # change one random param, sigma=param
         mutation='noise', # change all params, sigma~=hp.sigma_init*(sigma_decay**generation)
@@ -208,7 +223,7 @@ def make_hyperparameters():
 #         eval_time=200, # number of timesteps
         eval_time=2000, # number of timesteps
         pop_size=64, # population size
-#         pop_size=10, # population size
+#         pop_size=8, # population size
         # 2 = ~28-29 sec
         # 4 = ~24-27 sec
         # 8 = ~24
@@ -216,7 +231,7 @@ def make_hyperparameters():
         # 32 = ~24-25
         max_parallel=8, # 32, # max num sims to run simultaneously
         num_gens=1000, # number of generations
-#         num_gens=5,
+#         num_gens=1,
         sigma_init=0.1,
 #         num_envs=4, # number of environments each individual will be evaluated in
     )
@@ -245,16 +260,23 @@ def train(filename=None, play_paused=False):
         hp = make_hyperparameters()
         state = {} # training state. Used to restore training and save training history.
     
-#         env = PhototaxisEnv(id_=1, L=hp.L)
-#         env = StairsEnv(num_stairs=hp.num_stairs, 
-#                         depth=hp.stair_depth, width=hp.stair_width, thickness=hp.stair_thickness,
-#                         angle=hp.stair_angle, y_offset=hp.stair_y_offset)
-#         env = LadderEnv(length=hp.length, width=hp.width, thickness=hp.thickness, spacing=hp.spacing, y_offset=hp.y_offset)
-#         env = AngledLadderEnv(num_rungs=hp.ladder_num_rungs, spacing=hp.ladder_spacing, width=hp.ladder_width,
-#                               thickness=hp.ladder_thickness, angle=hp.ladder_angle, y_offset=hp.ladder_y_offset)
-        env = AngledLatticeEnv(num_rungs=hp['lat_num_rungs'], num_rails=hp['lat_num_rails'], 
-                               rung_spacing=hp['lat_rung_spacing'], rail_spacing=hp['lat_rail_spacing'], 
-                               thickness=hp['lat_thickness'], angle=hp['lat_angle'], y_offset=hp['lat_y_offset'])
+        if hp['obstacle'] == 'stairs':
+            env = StairsEnv(num_stairs=hp['num_stairs'], depth=hp['stair_depth'], 
+                            width=hp['stair_width'], thickness=hp['stair_thickness'],
+                            angle=hp['stair_angle'], y_offset=hp['stair_y_offset'])
+            hp['scaffolding_final_angle'] = hp['stair_angle']
+        elif hp['obstacle'] == 'angled_lattice':
+            env = AngledLatticeEnv(num_rungs=hp['lat_num_rungs'], num_rails=hp['lat_num_rails'], 
+                                   rung_spacing=hp['lat_rung_spacing'], rail_spacing=hp['lat_rail_spacing'], 
+                                   thickness=hp['lat_thickness'], angle=hp['lat_angle'], y_offset=hp['lat_y_offset'])
+            hp['scaffolding_final_angle'] = hp['lat_angle']
+        elif hp['obstacle'] == 'angled_ladder':
+            env = AngledLadderEnv(num_rungs=hp['ladder_num_rungs'], spacing=hp['ladder_spacing'], width=hp['ladder_width'],
+                                  thickness=hp['ladder_thickness'], angle=hp['ladder_angle'], y_offset=hp['ladder_y_offset'])
+            hp['scaffolding_final_angle'] = hp['ladder_angle']
+        else:
+#             env = LadderEnv(length=hp.length, width=hp.width, thickness=hp.thickness, spacing=hp.spacing, y_offset=hp.y_offset)
+            env = PhototaxisEnv(id_=1, L=hp['L'])
         evaluator = Evaluator(env=env, **hp)
         state['env'] = copy.deepcopy(env)
         state['evaluator'] = copy.deepcopy(evaluator)
@@ -285,7 +307,7 @@ def train(filename=None, play_paused=False):
           'hidden layers:', hp["num_hl"], 'params:', hp["num_params"])
     
     env = copy.deepcopy(state['env'])
-    evaluator = copy.deepcopy(state['evaluator'])
+#     evaluator = copy.deepcopy(state['evaluator'])
 #     solver = copy.deepcopy(state['solver'])
         
     # start or restart evolution
@@ -294,10 +316,22 @@ def train(filename=None, play_paused=False):
         state['gen'] = gen
         story = {'gen': gen} # track history
         solutions = solver.ask() # shape: (pop_size, num_params)
+        
+        if hp.get('scaffolding_kind') == 'linear':
+            if hp['num_gens'] == 1:
+                angle = hp['scaffolding_final_angle']
+            else:
+                angle_delta = (hp['scaffolding_final_angle'] - hp['scaffolding_initial_angle']) / (hp['num_gens'] - 1)
+                angle = hp['scaffolding_initial_angle'] + angle_delta * gen
+            env.angle = angle # this makes my inner functional programmer cry
+            evaluator = Evaluator(env=env, **hp)
+
+        story['angle'] = env.angle
         fitnesses = evaluator(solutions, play_blind=True, play_paused=False)
         story['fitnesses'] = copy.deepcopy(fitnesses)
         solver.tell(fitnesses)
         print(f'============\ngen: {gen}')
+        print('angle (radians):', story['angle'], 'angle (degrees):', story['angle'] * 180 / np.pi)
         print(f'fitnesses: {np.sort(fitnesses)[::-1]}')
         result = solver.result() # first element is the best solution, second element is the best fitness
         story['result'] = copy.deepcopy(result) # too heavy b/c of params?
