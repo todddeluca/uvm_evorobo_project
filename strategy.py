@@ -11,7 +11,8 @@ class ParallelHillClimber:
                  seed=None, mutation='noise'):
         '''
         mutation: 'noise' adds gaussian noise to every param. 
-          'evorobo' adds noise to one param at random (sigma=param) and clips.
+          'evorobo' adds noise to one randomly chosen parameter, using sigma=abs(param),
+           and clips the parameter.
         '''
         self.seed = seed
         self.num_params = num_params
@@ -27,58 +28,63 @@ class ParallelHillClimber:
         self.next_sols = None
         self.best_params = None
         self.best_fit = None
+        self.best_idx = None
 
     def ask(self):
         # mutation from class chooses a single weight at random,
         # adds gaussian noise using sigma=weight, and clips to [-1, 1]
         # new_weight = random.gauss(self.genome[i, j], math.fabs(self.genome[i, j]))
         # self.genome[i, j] = np.clip(new_weight, -1, 1)
-        
-        noise = np.random.randn(self.pop_size, self.num_params) * self.sigma
+
         if self.sols is None:
-            # initial iteration: initialize solutions
-            self.sols = noise
-            self.next_sols = self.sols
+            noise = np.random.randn(self.pop_size, self.num_params) * self.sigma
+            self.next_sols = noise
+        elif self.mutation == 'noise':
+            noise = np.random.randn(self.pop_size, self.num_params) * self.sigma
+            self.next_sols = self.sols + noise
+        elif self.mutation == 'evorobo':
+            # select a random param to mutate from each individual
+            idx = (np.arange(self.pop_size), np.random.choice(self.num_params, size=self.pop_size))
+            # masked noise is based on the magnitude of each parameter
+            mask = np.zeros((self.pop_size, self.num_params))
+            mask[idx] = 1
+            sigma = np.abs(self.sols)
+            noise = np.random.randn(self.pop_size, self.num_params) * sigma * mask
+            # add noise and clip params to [-1, 1]
+            self.next_sols = np.clip(self.sols + noise, -1, 1)
+            # np.clip(self.sols[idx] + np.random.randn(self.pop_size) * sigmas, -1, 1)
+#             print((self.sols - self.next_sols))
+#             print((self.sols - self.next_sols)[np.nonzero(self.sols - self.next_sols)])
         else:
-            if self.mutation == 'evorobo':
-                # select a random element from each solution
-                idx = (np.arange(self.pop_size), np.random.choice(self.num_params, size=self.pop_size))
-                # sigma is the absolute value of each element (bounded by sigma_limit)
-                sigmas = np.abs(self.sols[idx])
-                sigmas[sigmas < self.sigma_limit] = self.sigma_limit
-                # add noise to selected elements and clip to [-1, 1]
-                self.next_sols = self.sols
-                self.next_sols[idx] = np.clip(self.sols[idx] + np.random.randn(self.pop_size) * sigmas, -1, 1)
-                print((self.sols - self.next_sols))
-                print((self.sols - self.next_sols)[np.nonzero(self.sols - self.next_sols)])
-            else:
-                self.next_sols = self.sols + noise
+            raise Exception('unrecognized mutation method:', self.mutation)
             
         # decay sigma
         if self.sigma > self.sigma_limit:
             self.sigma = max(self.sigma_limit, self.sigma * self.sigma_decay)
-
+            
         return self.next_sols
-    
+                
     def tell(self, fits):
         '''
         compare fitnesses to previous fitnesses. replace if better.
         '''
-        if self.fits is None:
+        if self.sols is None:
             # initial iteration, initialize fitness
+            self.sols = self.next_sols
             self.fits = fits
         else:
+            # update population with improved indivs
             better_idx = (fits > self.fits)
             print(f'{better_idx.sum()} solutions improved')
             self.sols[better_idx] = self.next_sols[better_idx]
             self.fits[better_idx] = fits[better_idx]
             
-        best_idx = self.fits.argmax()
-        self.best_params = self.sols[best_idx]
-        self.best_fit = self.fits[best_idx]
+        self.best_idx = self.fits.argmax()
+        self.best_params = self.sols[self.best_idx]
+        self.best_fit = self.fits[self.best_idx]
 
     def result(self):
-        return (self.best_params, self.best_fit)
+        return (self.best_params, self.best_fit, self.best_idx)
 
     
 class AFPO:

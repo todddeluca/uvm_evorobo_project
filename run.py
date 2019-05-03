@@ -174,8 +174,8 @@ def make_hyperparameters():
         use_proprio=True,
         use_vestib=True,
         front_angle=np.pi/2, # pi/2 = face the y-direction
-#         obstacle = 'stairs',
-        obstacle = 'angled_lattice',
+        obstacle = 'stairs',
+#         obstacle = 'angled_lattice',
 #         obstacle = 'angled_ladder',
         # ladder
         length=L * 10,
@@ -184,11 +184,11 @@ def make_hyperparameters():
         spacing=1 * L, 
         y_offset=L * 5,
         # stairs
-        num_stairs=20,
+        num_stairs=10,
         stair_width=L * 80,
         stair_depth=L, # when angle=pi/2, depth == rung spacing
         stair_thickness=L / 2.5,
-        stair_angle=np.pi / 8,
+        stair_angle=0, #np.pi / 8,
         stair_y_offset=L * 2,
         # angled ladder
         ladder_num_rungs=20,
@@ -210,19 +210,20 @@ def make_hyperparameters():
         scaffolding_kind = None,
         scaffolding_initial_angle = 0,
         # Evolution Strategy
-#         strategy='phc',
+        strategy='phc',
 #         strategy='ga',
-        strategy='afpo',
+#         strategy='afpo',
 #         strategy='cmaes',
-        num_novel=2, # 0, # 1, # 4, # number of new lineages per generation (AFPO)
+#         num_novel=1, # 0, # 1, # 4, # number of new lineages per generation (AFPO)
 #         num_novel=0, # use with pop_size=1 for testing.
-        decay=0.0000, # weight decay
-#         mutation='evorobo', # change one random param, sigma=param
-        mutation='noise', # change all params, sigma~=hp.sigma_init*(sigma_decay**generation)
-        elite_ratio=0.2,
+#         decay=0.0000, # weight decay
+        mutation='evorobo', # change one random param, sigma=param
+#         mutation='noise', # change all params, sigma~=hp.sigma_init*(sigma_decay**generation)
+#         elite_ratio=0.2,
 #         eval_time=200, # number of timesteps
         eval_time=2000, # number of timesteps
-        pop_size=64, # population size
+#         pop_size=64, # population size
+        pop_size=1024, # ~same # of lineages as 1000gen afpo
 #         pop_size=8, # population size
         # 2 = ~28-29 sec
         # 4 = ~24-27 sec
@@ -230,8 +231,8 @@ def make_hyperparameters():
         # 16 = ~25
         # 32 = ~24-25
         max_parallel=8, # 32, # max num sims to run simultaneously
-        num_gens=1000, # number of generations
-#         num_gens=1,
+#         num_gens=1000, # number of generations
+        num_gens=2,
         sigma_init=0.1,
 #         num_envs=4, # number of environments each individual will be evaluated in
     )
@@ -298,7 +299,8 @@ def train(filename=None, play_paused=False):
         elif hp['strategy'] == 'cmaes':
             solver = es.CMAES(hp['num_params'], popsize=hp['pop_size'], weight_decay=hp['decay'], sigma_init=hp['sigma_init'])    
         elif hp['strategy'] == 'phc':
-            solver = ParallelHillClimber(hp['num_params'], hp['pop_size'], sigma_init=hp['sigma_init'], mutation=hp['mutation'])
+            solver = ParallelHillClimber(hp['num_params'], hp['pop_size'], sigma_init=hp['sigma_init'],
+                                         mutation=hp['mutation'])
 
     
 
@@ -339,11 +341,12 @@ def train(filename=None, play_paused=False):
             if hasattr(solver, attr):
                 story[attr] = copy.deepcopy(getattr(solver, attr))
                 
-        print('front size:', len(story['front_idx']))
-        print('front ages:', story['ages'][story['front_idx']])
-        print('front fits:', story['fits'][story['front_idx']])
-        print('front lineage:', story['lineage'][story['front_idx']])
-        print('front_idx:', story['front_idx'])
+        if 'front_idx' in story:
+            print('front size:', len(story['front_idx']))
+            print('front ages:', story['ages'][story['front_idx']])
+            print('front fits:', story['fits'][story['front_idx']])
+            print('front lineage:', story['lineage'][story['front_idx']])
+            print('front_idx:', story['front_idx'])
         gen_end_time = datetime.datetime.now()
         gen_time = gen_end_time - gen_start_time
         story['gen_time'] = gen_time
