@@ -1,4 +1,6 @@
+'''
 
+'''
 
 
 import argparse
@@ -11,24 +13,95 @@ import random
 import pprint
 
 import pyrosim
-import es # from es import SimpleGA, CMAES, PEPG, OpenES
 
 from robot import Robot
-from environment import (LadderEnv, StairsEnv, PhototaxisEnv, AngledLadderEnv, AngledLatticeEnv,
-                         SpatialScaffoldingStairsEnv)
-from strategy import ParallelHillClimber, AFPO
+from environment import SpatialScaffoldingStairsEnv
 
 
-class Hyperparam:
-    '''Dummy class for accessing hyperparams as attributes. Instead of using a dict.'''
-    def __init__(self, **kwargs):
-        for key in kwargs:
-            setattr(self, key, kwargs[key])
+class ParallelHillClimber:
+    '''
+    Evaluate a population in parallel
+    '''
+    def __init__(self, num_params, pop_size, 
+                 sigma_init=0.1, sigma_decay=0.999, sigma_limit=0.01, 
+                 seed=None, mutation='noise'):
+        '''
+        mutation: 'noise' adds gaussian noise to every param. 
+          'evorobo' adds noise to one randomly chosen parameter, using sigma=abs(param),
+           and clips the parameter.
+        '''
+        self.seed = seed
+        self.num_params = num_params
+        self.pop_size = pop_size
+        self.sigma_init = sigma_init
+        self.sigma_decay = sigma_decay
+        self.sigma_limit = sigma_limit
+        self.sigma = self.sigma_init
+        self.mutation = mutation
+        
+        self.sols = None
+        self.fits = None
+        self.next_sols = None
+        self.best_params = None
+        self.best_fit = None
+        self.best_idx = None
 
+    def ask(self):
+        # mutation from class chooses a single weight at random,
+        # adds gaussian noise using sigma=weight, and clips to [-1, 1]
+        # new_weight = random.gauss(self.genome[i, j], math.fabs(self.genome[i, j]))
+        # self.genome[i, j] = np.clip(new_weight, -1, 1)
 
-# class Hyperparameters(dict):
-#     def translate(self, **kwargs):
-#         return Hyperparameters([(new_key, self[old_key]) for new_key, old_key in kwargs.items()])
+        if self.sols is None:
+            noise = np.random.randn(self.pop_size, self.num_params) * self.sigma
+            self.next_sols = noise
+        elif self.mutation == 'noise':
+            noise = np.random.randn(self.pop_size, self.num_params) * self.sigma
+            self.next_sols = self.sols + noise
+        elif self.mutation == 'evorobo':
+            # select a random param to mutate from each individual
+            idx = (np.arange(self.pop_size), np.random.choice(self.num_params, size=self.pop_size))
+            # masked noise is based on the magnitude of each parameter
+            mask = np.zeros((self.pop_size, self.num_params))
+            mask[idx] = 1
+            sigma = np.abs(self.sols)
+            noise = np.random.randn(self.pop_size, self.num_params) * sigma * mask
+            # add noise and clip params to [-1, 1]
+            self.next_sols = np.clip(self.sols + noise, -1, 1)
+            # np.clip(self.sols[idx] + np.random.randn(self.pop_size) * sigmas, -1, 1)
+#             print((self.sols - self.next_sols))
+#             print((self.sols - self.next_sols)[np.nonzero(self.sols - self.next_sols)])
+        else:
+            raise Exception('unrecognized mutation method:', self.mutation)
+            
+        # decay sigma
+        if self.sigma > self.sigma_limit:
+            self.sigma = max(self.sigma_limit, self.sigma * self.sigma_decay)
+            
+        return self.next_sols
+                
+    def tell(self, fits):
+        '''
+        compare fitnesses to previous fitnesses. replace if better.
+        '''
+        if self.sols is None:
+            # initial iteration, initialize fitness
+            self.sols = self.next_sols
+            self.fits = fits
+        else:
+            # update population with improved indivs
+            better_idx = (fits > self.fits)
+            print(f'{better_idx.sum()} solutions improved')
+            self.sols[better_idx] = self.next_sols[better_idx]
+            self.fits[better_idx] = fits[better_idx]
+            
+        self.best_idx = self.fits.argmax()
+        self.best_params = self.sols[self.best_idx]
+        self.best_fit = self.fits[self.best_idx]
+        print(f'best_fit: {self.best_fit:.4} best_idx: {self.best_idx}')
+
+    def result(self):
+        return (self.best_params, self.best_fit, self.best_idx)
 
 
 class Individual:  
@@ -67,32 +140,16 @@ class Individual:
     def compute_fitness(self):
         self.sim.wait_to_finish()
             
-        # y-position sensor fitness
-        y_fitness = self.sim.get_sensor_data(sensor_id=self.position_sensor_id, svi=1)[-1]
-        
-        # x position fitness penalizes going around the obstacle.
-        x_max_dist = np.abs(self.sim.get_sensor_data(sensor_id=self.position_sensor_id, svi=0)).max()
-        x_fitness = -1 * (x_max_dist - max(abs(self.env.x_min), abs(self.env.x_max)))**2 # 
-        
-        # vestibular sensor fitness. angle between body and vertical.
-        v_data = self.sim.get_sensor_data(sensor_id=self.v_id)
-#         print(f'vestibular data: {v_data}')
-        v_data = np.abs(v_data)
-        v_fitness = 1 + v_data[-1] / np.pi # v_data in [0, pi?]
-
-        # light sensor fitness
-        light_data = self.sim.get_sensor_data(sensor_id=self.distance_sensor_id)
-        # last reading of sensor leads to robots that get high and cling for dear life.
-        light_fitness = light_data[-1]
-        
-        # rung touch sensor fitness
-        rung_fitness = sum([self.sim.get_sensor_data(sensor_id=tid).max() for tid in self.tids]) / 10
-        
+        # distance to trophy fitness
+        x_pos = self.sim.get_sensor_data(sensor_id=self.position_sensor_id, svi=0)[-1]
+        y_pos = self.sim.get_sensor_data(sensor_id=self.position_sensor_id, svi=1)[-1]
+        z_pos = self.sim.get_sensor_data(sensor_id=self.position_sensor_id, svi=2)[-1]
+        robot_pos = np.array([x_pos, y_pos, z_pos])
+        goal_pos = np.array(self.env.trophy_pos)
+        dist = np.sqrt(np.dot(robot_pos - goal_pos, robot_pos - goal_pos))
+        dist_fitness = 1 / (dist + 1)
         del self.sim # so deepcopy does not copy the simulator
-#         fitness = 1.0 * last_fitness + 0.0 * rung_fitness + 0.0 * max_fitness + 0.0 * y_fitness
-#         fitness = light_fitness / v_fitness
-        fitness = light_fitness
-        return fitness
+        return dist_fitness
 
 
 class Evaluator:
@@ -175,71 +232,27 @@ def make_hyperparameters():
         use_proprio=True,
         use_vestib=True,
         front_angle=np.pi/2, # pi/2 = face the y-direction
-        obstacle='scaffolding_stairs',
-#         obstacle='stairs',
-#         obstacle='angled_lattice',
-#         obstacle='angled_ladder',
-        # ladder
-        length=L * 10,
-        width=L * 5,
-        thickness=L / 5,
-        spacing=1 * L, 
-        y_offset=L * 5,
         # stairs
         num_stairs=16,
         stair_width=L * 80,
         stair_depth=L, # when angle=pi/2, depth == rung spacing
         stair_thickness=L / 2.5,
-        stair_angle=np.pi / 16,
         stair_y_offset=L * 2,
-        stair_max_rise=L / 2.5,
+        stair_max_rise=L / 2.5, # L/2.5 seems hard but doable. Maybe 2*L/2.5 is stretch goal
         stair_initial_temp=1,
         stair_temp_scale=4,
-        # angled ladder
-        ladder_num_rungs=20,
-        ladder_angle=np.pi / 8,
-        ladder_width=L * 80,
-        ladder_thickness=L / 5,
-        ladder_y_offset=L * 2,
-        ladder_spacing=L,
-        # angled lattice
-        lat_num_rungs=20,
-        lat_num_rails=2, # 80,
-        lat_rung_spacing=L,
-        lat_rail_spacing=L * 80,
-        lat_thickness=L / 5,
-        lat_angle=np.pi / 3, # np.pi / 16, # np.pi / 2 / 4,
-        lat_y_offset=L * 2,
-        # Scaffolding
-#         scaffolding_kind = 'linear',
-        scaffolding_kind = None,
-        scaffolding_initial_angle = 0,
         # Evolution Strategy
         strategy='phc',
-#         strategy='ga',
-#         strategy='afpo',
-#         strategy='cmaes',
-#         num_novel=1, # 0, # 1, # 4, # number of new lineages per generation (AFPO)
-#         num_novel=0, # use with pop_size=1 for testing.
-#         decay=0.0000, # weight decay
 #         mutation='evorobo', # change one random param, sigma=param
         mutation='noise', # change all params, sigma~=hp.sigma_init*(sigma_decay**generation)
-#         elite_ratio=0.2,
+        sigma_init=0.1, # mutation noise
 #         eval_time=200, # number of timesteps
         eval_time=2000, # number of timesteps
-        pop_size=64, # population size
-#         pop_size=256, # ~same # of lineages as 1000gen afpo
-#         pop_size=1, # population size
-        # 2 = ~28-29 sec
-        # 4 = ~24-27 sec
-        # 8 = ~24
-        # 16 = ~25
-        # 32 = ~24-25
-        max_parallel=8, # 32, # max num sims to run simultaneously
+#         pop_size=64, # population size
+        pop_size=8, # population size
+        max_parallel=8, # max num sims to run simultaneously
 #         num_gens=1000, # number of generations
         num_gens=10,
-        sigma_init=0.1,
-#         num_envs=4, # number of environments each individual will be evaluated in
     )
     
     # hyperparameter configuration
@@ -266,63 +279,26 @@ def train(filename=None, play_paused=False):
         hp = make_hyperparameters()
         state = {} # training state. Used to restore training and save training history.
     
-        if hp['obstacle'] == 'scaffolding_stairs':
-            env = SpatialScaffoldingStairsEnv(
-                num_stairs=hp['num_stairs'], depth=hp['stair_depth'], 
-                width=hp['stair_width'], thickness=hp['stair_thickness'],
-                y_offset=hp['stair_y_offset'], max_rise=hp['stair_max_rise'],
-                temp=hp['stair_initial_temp'], temp_scale=hp['stair_temp_scale'])
-        elif hp['obstacle'] == 'stairs':
-            env = StairsEnv(
-                num_stairs=hp['num_stairs'], depth=hp['stair_depth'], 
-                width=hp['stair_width'], thickness=hp['stair_thickness'],
-                angle=hp['stair_angle'], y_offset=hp['stair_y_offset'])
-            hp['scaffolding_final_angle'] = hp['stair_angle']
-        elif hp['obstacle'] == 'angled_lattice':
-            env = AngledLatticeEnv(num_rungs=hp['lat_num_rungs'], num_rails=hp['lat_num_rails'], 
-                                   rung_spacing=hp['lat_rung_spacing'], rail_spacing=hp['lat_rail_spacing'], 
-                                   thickness=hp['lat_thickness'], angle=hp['lat_angle'], y_offset=hp['lat_y_offset'])
-            hp['scaffolding_final_angle'] = hp['lat_angle']
-        elif hp['obstacle'] == 'angled_ladder':
-            env = AngledLadderEnv(num_rungs=hp['ladder_num_rungs'], spacing=hp['ladder_spacing'], width=hp['ladder_width'],
-                                  thickness=hp['ladder_thickness'], angle=hp['ladder_angle'], y_offset=hp['ladder_y_offset'])
-            hp['scaffolding_final_angle'] = hp['ladder_angle']
-        else:
-#             env = LadderEnv(length=hp.length, width=hp.width, thickness=hp.thickness, spacing=hp.spacing, y_offset=hp.y_offset)
-            env = PhototaxisEnv(id_=1, L=hp['L'])
+        env = SpatialScaffoldingStairsEnv(
+            num_stairs=hp['num_stairs'], depth=hp['stair_depth'], 
+            width=hp['stair_width'], thickness=hp['stair_thickness'],
+            y_offset=hp['stair_y_offset'], max_rise=hp['stair_max_rise'],
+            temp=hp['stair_initial_temp'], temp_scale=hp['stair_temp_scale'])
+
         evaluator = Evaluator(env=env, **hp)
         state['env'] = copy.deepcopy(env)
         state['evaluator'] = copy.deepcopy(evaluator)
         state['history'] = []
         state['gen'] = -1
         
-        # defines genetic algorithm solver
-        if False: # initialize population from best params
-            solutions = np.tile(params, (hp['pop_size'], 1))
-        else:
-            solutions = None
-        if hp['strategy'] == 'ga':
-            solver = es.SimpleGA(hp['num_params'], sigma_init=hp['sigma_init'], 
-                                 popsize=hp['pop_size'], elite_ratio=hp['elite_ratio'], 
-                                 forget_best=False, weight_decay=hp['decay'])
-        elif hp['strategy'] == 'afpo':
-            solver = AFPO(hp['num_params'], hp['pop_size'], sigma_init=hp['sigma_init'], sols=solutions, 
-                          num_novel=hp['num_novel'])
-        elif hp['strategy'] == 'cmaes':
-            solver = es.CMAES(hp['num_params'], popsize=hp['pop_size'], weight_decay=hp['decay'], sigma_init=hp['sigma_init'])    
-        elif hp['strategy'] == 'phc':
-            solver = ParallelHillClimber(hp['num_params'], hp['pop_size'], sigma_init=hp['sigma_init'],
-                                         mutation=hp['mutation'])
-
-    
+        solver = ParallelHillClimber(hp['num_params'], hp['pop_size'], 
+                                     sigma_init=hp['sigma_init'], mutation=hp['mutation'])
 
     print('Experiment', hp["exp_id"])
     print('legs:', hp["num_legs"], 'hidden units:', hp["num_hidden"], 
           'hidden layers:', hp["num_hl"], 'params:', hp["num_params"])
     
     env = copy.deepcopy(state['env'])
-#     evaluator = copy.deepcopy(state['evaluator'])
-#     solver = copy.deepcopy(state['solver'])
         
     # start or restart evolution
     for gen in range(state['gen'] + 1, hp['num_gens']):
@@ -330,36 +306,17 @@ def train(filename=None, play_paused=False):
         state['gen'] = gen
         story = {'gen': gen} # track history
         solutions = solver.ask() # shape: (pop_size, num_params)
-        
-        if hp.get('scaffolding_kind') == 'linear':
-            if hp['num_gens'] == 1:
-                angle = hp['scaffolding_final_angle']
-            else:
-                angle_delta = (hp['scaffolding_final_angle'] - hp['scaffolding_initial_angle']) / (hp['num_gens'] - 1)
-                angle = hp['scaffolding_initial_angle'] + angle_delta * gen
-            env.angle = angle # this makes my inner functional programmer cry
-            evaluator = Evaluator(env=env, **hp)
-
         fitnesses = evaluator(solutions, play_blind=True, play_paused=False)
         story['fitnesses'] = copy.deepcopy(fitnesses)
         solver.tell(fitnesses)
         print(f'============\ngen: {gen}')
-        if hasattr(env, 'angle'):
-            story['angle'] = env.angle
-            print('angle (radians):', story['angle'], 'angle (degrees):', story['angle'] * 180 / np.pi)
         print(f'fitnesses: {np.sort(fitnesses)[::-1]}')
         result = solver.result() # first element is the best solution, second element is the best fitness
         story['result'] = copy.deepcopy(result) # too heavy b/c of params?
-        for attr in ['fits', 'ages', 'lineage', 'front_idx', 'best_idx', 'best_age', 'best_fit', 'sigma']: # AFPO
+        for attr in ['fits', 'ages', 'lineage', 'best_idx', 'best_age', 'best_fit', 'sigma']:
             if hasattr(solver, attr):
                 story[attr] = copy.deepcopy(getattr(solver, attr))
                 
-        if 'front_idx' in story:
-            print('front size:', len(story['front_idx']))
-            print('front ages:', story['ages'][story['front_idx']])
-            print('front fits:', story['fits'][story['front_idx']])
-            print('front lineage:', story['lineage'][story['front_idx']])
-            print('front_idx:', story['front_idx'])
         gen_end_time = datetime.datetime.now()
         gen_time = gen_end_time - gen_start_time
         story['gen_time'] = gen_time
@@ -389,17 +346,10 @@ def play(filename=None, play_paused=False):
     solutions = np.expand_dims(params, axis=0)
 #     evaluator.eval_time = 4000
 #     evaluator.env.num_stairs = 10
-    if not hasattr(evaluator, 'max_parallel'):
-        evaluator.max_parallel = None
-        
+
     # print hyperparams
-    if isinstance(hp, Hyperparam):
-        for attr in dir(hp):
-            if not attr.startswith('_'):
-                print(f'{attr}: {getattr(hp, attr)}')  
-    else:
-        for k, v in hp.items():
-            print(k, ':', v)
+    for k, v in hp.items():
+        print(k, ':', v)
 
     evaluator(solutions, play_blind=False, play_paused=play_paused)
     

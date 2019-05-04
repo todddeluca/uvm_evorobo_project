@@ -105,7 +105,8 @@ class SpatialScaffoldingStairsEnv:
             sim.send_fixed_joint(sid, -1)
         
         # the trophy is the light source
-        send_trophy(sim, x=0, y=stair_coords[-1][1], z=stair_coords[-1][2] + 0.5 * self.thick,
+        self.trophy_pos = (0, stair_coords[-1][1], stair_coords[-1][2] + 0.5 * self.thick)
+        send_trophy(sim, x=self.trophy_pos[0], y=self.trophy_pos[1], z=self.trophy_pos[2],
                     size=self.thick, collision_group=self.group)
         
         self.x_min = -self.width / 2
