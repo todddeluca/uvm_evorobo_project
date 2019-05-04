@@ -37,6 +37,85 @@ def send_trophy(sim, x, y, z, size, collision_group):
         sim.send_fixed_joint(id, -1)
 
 
+class SpatialScaffoldingStairsEnv:
+    '''
+    Floating Stairs with a light source trophy on top.
+    
+    Each stair is placed vertically relative to the previous stair. This is the
+    rise of the stair. The rise of each stair increases from the first stair to
+    the last stair according to the scaffolding schedule. This spatial change in rise
+    is where the term "Spatial Scaffolding" comes from.
+    
+    The rise of the final stair is always equal to the max_rise.
+    '''
+    def __init__(self, num_stairs, depth, width, thickness, y_offset, 
+                 max_rise, temp=0, min_temp=-10, temp_scale=4):
+        '''
+        y_offset: y-axis position of the front of the initial stair.
+        max_rise: the maximum rise from one stair to the next.
+        rise_rate: the scheduling parameter from the genome which determines the 
+          spatial scaffolding rate.
+        temp: scaffolding temperature. Expected to be roughly in the range -1 to 1, but
+          can range from -inf to inf. 0 means medium scaffolding, 
+          >= 1 means about max_rise for every stair, and <= -1 means about zero
+          rise for every stair except the last.
+        min_temp: <= -1 means stairs can rise as little as possible. >= 1 means max_rise
+          for every step.
+        temp_scale: >= 0. multiplied by temp to generate stairs. larger scale means more extreme
+        stairs (either very flat or very steep). 
+        '''
+        self.num_stairs = num_stairs
+        self.depth = depth 
+        self.width = width
+        self.y_offset = y_offset
+        self.thick = thickness # stair thickness
+        self.max_rise = max_rise
+        self.temp = temp
+        self.temp_scale = np.abs(temp_scale)
+        self.min_temp = np.clip(min_temp, -10, 10)
+        self.group = 'env' # collision group
+        
+    def send_to(self, sim):
+        # normalized stair position (0 to 1)
+        positions = np.arange(self.num_stairs) / (self.num_stairs - 1) 
+        # the fraction of max_rise for each stair.
+        temp = max(self.temp, self.min_temp)
+        if temp >= 0:
+            fracs = 1 - np.power(1 - positions, np.exp(self.temp_scale * temp))
+        else:
+            fracs = np.power(positions, np.exp(-self.temp_scale * temp))
+        
+        rises = fracs * self.max_rise
+        
+        # x, y, z position of each stair
+        stair_coords = [(0, 
+                         self.y_offset + 0.5 * self.depth + i * self.depth,
+                         0.5 * self.thick + rises[:(i+1)].sum()
+                        ) for i in range(self.num_stairs)]
+        stair_ids = []
+        for x, y, z in stair_coords:
+            sid = sim.send_box(x=x, y=y, z=z, 
+                               length=self.depth, width=self.width, height=self.thick,
+                               r=1, g=1, b=1,
+                               collision_group=self.group)
+            stair_ids.append(sid)
+            
+        # fix the stairs in place
+        for sid in stair_ids:
+            sim.send_fixed_joint(sid, -1)
+        
+        # the trophy is the light source
+        send_trophy(sim, x=0, y=stair_coords[-1][1], z=stair_coords[-1][2] + 0.5 * self.thick,
+                    size=self.thick, collision_group=self.group)
+        
+        self.x_min = -self.width / 2
+        self.x_max = self.width / 2 
+        
+        # dummy touch id for fitness function
+        touch_ids = [sim.send_touch_sensor(body_id=stair_ids[-1])]
+        return touch_ids
+
+    
 class PhototaxisEnv:
     '''
     Environment for testing Phototaxis by placing a light source block on the ground.
