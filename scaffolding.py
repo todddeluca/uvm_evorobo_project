@@ -298,6 +298,7 @@ class ScaffoldingPopulation:
         self.pop_idx = np.arange(self.pop_size)
         
     def reset(self):
+        start = datetime.datetime.now()
         self.history = []
         self.gen = 0 # generation 0
         print('\n==================')
@@ -316,9 +317,16 @@ class ScaffoldingPopulation:
         # find new done genomes, update dones, and report.
         self.update_dones()
         self.update_best()
-        print('fits max:', self.fits.max(), 'fits min:', self.fits.min(), 
-              'fits mean:', self.fits.mean(), 'fits std:', self.fits.std(), 
-              'fits median:', self.fits.median())
+        
+        gen_time = datetime.datetime.now() - start
+        self.history.append({'gen': self.gen, 
+                             'gen_time': gen_time,
+                             'fits_max': self.fits.max(),
+                             'fits_min': self.fits.min(), 
+                             'fits_mean': self.fits.mean(),
+                             'fits_std': self.fits.std(), 
+                             'fits_median': np.median(self.fits)
+                            })
         print('gen_time:', gen_time)
         
     def step(self):
@@ -358,9 +366,6 @@ class ScaffoldingPopulation:
                              'fits_std': self.fits.std(), 
                              'fits_median': np.median(self.fits)
                             })
-        print('fits max:', self.fits.max(), 'fits min:', self.fits.min(), 
-              'fits mean:', self.fits.mean(), 'fits std:', self.fits.std(), 
-              'fits median:', np.median(self.fits))
         print('gen_time:', gen_time)
                     
     def update_fitness(self, genomes=None, idx=None):
@@ -584,9 +589,6 @@ for rise in rises:
         pop = model['pop']
     else:
         hp = make_hyperparameters()
-        print('stair_max_rise:', hp['stair_max_rise'])
-        print('temp_schedule:', hp['temp_schedule'])
-        print('use_temp_param', hp['use_temp_param'])
         if hp['mutation'] == 'noise':
             mutator = DecayingMutator(sigma_init=hp['sigma_init'])
         elif hp['mutation'] == 'evorobo':
@@ -595,6 +597,9 @@ for rise in rises:
         pop = ScaffoldingPopulation(mutator=mutator, **hp)
         pop.reset()
            
+    print('stair_max_rise:', hp['stair_max_rise'])
+    print('temp_schedule:', hp['temp_schedule'])
+    print('use_temp_param', hp['use_temp_param'])
     train_population(hp, pop)
                 
 def train_population(hp, pop):
