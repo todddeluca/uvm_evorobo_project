@@ -322,7 +322,10 @@ class ScaffoldingPopulation:
         for fitter (or all) genomes: update dones, update temps_idx and fitness
         for each individual, if not done, make next genome, evaluate fitness using curr scaffolding temp (and temp param). if fitness passes threshold: if temp passes threshold, done, else, increase scaffolding temp.
         '''
+        start = datetime.datetime.now()
         self.gen += 1
+        print('\n==================')
+        print('step self.gen:', self.gen)
         
         self.update_scaffolding_temp()
         self.update_genome_temp()
@@ -340,6 +343,11 @@ class ScaffoldingPopulation:
         self.update_fitness(next_genomes, next_idx)
         self.update_dones()
         self.update_best()
+        gen_time = datetime.datetime.now() - start
+        self.history.append({'gen': self.gen, 
+                             'gen_time': gen_time,
+                            })
+        print('step gen_time:', gen_time)
                     
     def update_fitness(self, genomes=None, idx=None):
         '''
@@ -485,7 +493,7 @@ def make_hyperparameters():
     hp = dict(
         # experiment
         exp_id=exp_id, # experiment id
-        checkpoint_step=100,
+        checkpoint_step=10,
         # robot
         L=L, # leg length
         R=L / 5, # leg radius
@@ -573,7 +581,6 @@ for rise in rises:
             pop.reset()
             while pop.gen < hp['num_gens']:
                 pop.step()
-                
                 if hp['checkpoint_step'] is not None and pop.gen % hp['checkpoint_step'] == 0:
                     model = {'hp': hp, 'pop': pop}
                     save_model('population.pkl', model)
