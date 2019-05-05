@@ -300,6 +300,8 @@ class ScaffoldingPopulation:
     def reset(self):
         self.history = []
         self.gen = 0 # generation 0
+        print('\n==================')
+        print('self.gen:', self.gen)
         self.temps_idx = np.zeros(self.pop_size, dtype=int) # index of current scaffolding temp of indivs
         self.ages = np.zeros(self.pop_size, dtype=int) # total gens a lineage has evolved for
         self.dones = np.zeros(self.pop_size, dtype=bool) # if an indiv is done evolving
@@ -314,6 +316,10 @@ class ScaffoldingPopulation:
         # find new done genomes, update dones, and report.
         self.update_dones()
         self.update_best()
+        print('fits max:', self.fits.max(), 'fits min:', self.fits.min(), 
+              'fits mean:', self.fits.mean(), 'fits std:', self.fits.std(), 
+              'fits median:', self.fits.median())
+        print('gen_time:', gen_time)
         
     def step(self):
         '''
@@ -325,7 +331,7 @@ class ScaffoldingPopulation:
         start = datetime.datetime.now()
         self.gen += 1
         print('\n==================')
-        print('step self.gen:', self.gen)
+        print('self.gen:', self.gen)
         
         self.update_scaffolding_temp()
         self.update_genome_temp()
@@ -346,8 +352,16 @@ class ScaffoldingPopulation:
         gen_time = datetime.datetime.now() - start
         self.history.append({'gen': self.gen, 
                              'gen_time': gen_time,
+                             'fits_max': self.fits.max(),
+                             'fits_min': self.fits.min(), 
+                             'fits_mean': self.fits.mean(),
+                             'fits_std': self.fits.std(), 
+                             'fits_median': np.median(self.fits)
                             })
-        print('step gen_time:', gen_time)
+        print('fits max:', self.fits.max(), 'fits min:', self.fits.min(), 
+              'fits mean:', self.fits.mean(), 'fits std:', self.fits.std(), 
+              'fits median:', np.median(self.fits))
+        print('gen_time:', gen_time)
                     
     def update_fitness(self, genomes=None, idx=None):
         '''
@@ -518,7 +532,7 @@ def make_hyperparameters():
         fit_thresh=0.7, # fitness victory condition
         stair_rises=[0, 0.25 * L / 2.5, 0.5 * L / 2.5, 0.75 * L / 2.5, L / 2.5],
         temp_schedule=[-1, -0.25, 0, 0.25, 1], # scaffolded temp schedule, last entry is temp victory condition
-        use_temp_param=False,
+        use_temp_param=True,
         # Evolution Strategy
 #         mutation='evorobo', # change one random param, sigma=param
         mutation='noise', # change all params, sigma~=hp.sigma_init*(sigma_decay**generation)
@@ -529,8 +543,8 @@ def make_hyperparameters():
 #         pop_size=64, # population size
         pop_size=4, # population size
         max_parallel=8, # max num sims to run simultaneously
-#         num_gens=1000, # number of generations
-        num_gens=4,
+        num_gens=1000, # number of generations
+#         num_gens=4,
     )
     
     # calculate number of params
@@ -554,44 +568,50 @@ for rise in rises:
     train scaffolded population for 1000 generations or until done.
         for each individual, if not done, make next genome, evaluate fitness using curr scaffolding temp (and temp param). if fitness passes threshold: if temp passes threshold, done, else, increase scaffolding temp.
     '''
+    # rises and variations can be used with for loops to try a 
+    # variety of rises and scaffolding combinations
     hp = make_hyperparameters()
     rises = hp['stair_rises']
-    for max_rise in rises:
-        variations = [
-            (hp['temp_schedule'][-1:], False), # no scaffolding
-            (hp['temp_schedule'], False), # fixed scaffolding
-            (hp['temp_schedule'], True), # evolved scaffolding
-        ]
-        for temp_schedule, use_temp_param in variations:
-            hp = make_hyperparameters()
-            hp['stair_max_rise'] = max_rise
-            hp['temp_schedule'] = temp_schedule
-            hp['use_temp_param'] = use_temp_param
-            
-            print('stair_max_rise:', hp['stair_max_rise'])
-            print('temp_schedule:', hp['temp_schedule'])
-            print('use_temp_param', hp['use_temp_param'])
-            
-            if hp['mutation'] == 'noise':
-                mutator = DecayingMutator(sigma_init=hp['sigma_init'])
-            elif hp['mutation'] == 'evorobo':
-                mutator = EvoRoboMutator()
-            
-            pop = ScaffoldingPopulation(mutator=mutator, **hp)
-            pop.reset()
-            while pop.gen < hp['num_gens']:
-                pop.step()
-                if hp['checkpoint_step'] is not None and pop.gen % hp['checkpoint_step'] == 0:
-                    model = {'hp': hp, 'pop': pop}
-                    save_model('population.pkl', model)
-                    save_model('experiments/' + hp['exp_id'] + '_robot.pkl', model)
-                    print('Saved model at gen', pop.gen)
-            
-            pop.play()
-            model = {'hp': hp, 'pop': pop}
-            save_model('population.pkl', model)
-            save_model('experiments/' + hp['exp_id'] + '_robot.pkl', model)
-            print('Saved model at gen', pop.gen)
+    variations = [ # temp_schedule and use_temp_param
+        (hp['temp_schedule'][-1:], False), # no scaffolding
+        (hp['temp_schedule'], False), # fixed scaffolding
+        (hp['temp_schedule'], True), # evolved scaffolding
+    ]
+
+    if filename is not None:
+        model = load_model(filename)
+        hp = model['hp']
+        pop = model['pop']
+    else:
+        hp = make_hyperparameters()
+        print('stair_max_rise:', hp['stair_max_rise'])
+        print('temp_schedule:', hp['temp_schedule'])
+        print('use_temp_param', hp['use_temp_param'])
+        if hp['mutation'] == 'noise':
+            mutator = DecayingMutator(sigma_init=hp['sigma_init'])
+        elif hp['mutation'] == 'evorobo':
+            mutator = EvoRoboMutator()
+
+        pop = ScaffoldingPopulation(mutator=mutator, **hp)
+        pop.reset()
+           
+    train_population(hp, pop)
+                
+def train_population(hp, pop):
+    if pop.gen < hp['num_gens']:
+        while pop.gen < hp['num_gens']:
+            pop.step()
+            if hp['checkpoint_step'] is not None and pop.gen % hp['checkpoint_step'] == 0:
+                model = {'hp': hp, 'pop': pop}
+                save_model('population.pkl', model)
+                save_model('experiments/' + hp['exp_id'] + '_population.pkl', model)
+
+        pop.play()
+        model = {'hp': hp, 'pop': pop}
+        save_model('population.pkl', model)
+        save_model('experiments/' + hp['exp_id'] + '_population.pkl', model)
+        
+    print('Done training population. gen is', pop.gen)
             
     
 def play(filename=None, play_paused=False):
@@ -600,23 +620,31 @@ def play(filename=None, play_paused=False):
         
     model = load_model(filename)
     hp = model['hp']
-    pop = model['population']
+    pop = model['pop']
         
+    # print history
+#     pprint.pprint(pop.history)
     # print hyperparams
     for k, v in hp.items():
         print(k, ':', v)
+        
+    print('best_idx:', pop.best_idx, 'best_fit:', pop.best_fit,
+          'best_age:', pop.best_age, 'best temps_idx:', pop.temps_idx[pop.best_idx],
+          'best scaffolding temp:', pop.temp_schedule[pop.temps_idx[pop.best_idx]],
+          'best genome temp:', pop.genomes[pop.best_idx, 0])
+    print('sorted fits:', np.sort(pop.fits)[::-1])
     
-    # print history
-    pprint.pprint(pop.history)
     pop.play()
     
     
 def save_model(filename, model):
+    print('Saving model to', filename)
     with open(filename, 'wb') as fh:
         pickle.dump(model, fh)
         
 
 def load_model(filename):
+    print('Loading model from', filename)
     with open(filename, 'rb') as fh:
         model = pickle.load(fh)
         
