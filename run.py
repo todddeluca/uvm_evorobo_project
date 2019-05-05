@@ -164,20 +164,20 @@ def make_hyperparameters():
     hp = dict(
         # experiment
         exp_id=exp_id, # experiment id
-        checkpoint_step=100,
+        checkpoint_step=10,
         # robot
         L=L, # leg length
         R=L / 5, # leg radius
         S=L / 2, # body radius
-        num_legs=5,
-        num_hidden=3, # 6
+        num_legs=8,
+        num_hidden=4, # 6
         num_hl=0, # number of hidden layers
         use_proprio=True,
         use_vestib=True,
         front_angle=np.pi/2, # pi/2 = face the y-direction
-        obstacle='scaffolding_stairs',
+#         obstacle='scaffolding_stairs',
 #         obstacle='stairs',
-#         obstacle='angled_lattice',
+        obstacle='angled_lattice',
 #         obstacle='angled_ladder',
         # ladder
         length=L * 10,
@@ -203,11 +203,11 @@ def make_hyperparameters():
         ladder_y_offset=L * 2,
         ladder_spacing=L,
         # angled lattice
-        lat_num_rungs=20,
-        lat_num_rails=2, # 80,
+        lat_num_rungs=8, # 20,
+        lat_num_rails=6, # 80,
         lat_rung_spacing=L,
-        lat_rail_spacing=L * 80,
-        lat_thickness=L / 5,
+        lat_rail_spacing=L * 2, # L*80,
+        lat_thickness=L / 10, # L / 5,
         lat_angle=np.pi / 3, # np.pi / 16, # np.pi / 2 / 4,
         lat_y_offset=L * 2,
         # Scaffolding
@@ -236,8 +236,8 @@ def make_hyperparameters():
         # 16 = ~25
         # 32 = ~24-25
         max_parallel=8, # 32, # max num sims to run simultaneously
-#         num_gens=1000, # number of generations
-        num_gens=10,
+        num_gens=1000, # number of generations
+#         num_gens=10,
         sigma_init=0.1,
 #         num_envs=4, # number of environments each individual will be evaluated in
     )

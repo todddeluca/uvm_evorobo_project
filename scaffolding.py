@@ -8,6 +8,7 @@ import copy
 import datetime
 import math
 import numpy as np
+import pandas as pd
 import pickle
 import random
 import pprint
@@ -456,7 +457,14 @@ class ScaffoldingPopulation:
 
     def play(self, idx=None, play_paused=False):
         # convert None to [int] so genomes[idx] has 2d shape.
-        idx = [self.best_idx] if idx is None else idx
+        idx = self.best_idx if idx is None else idx
+        try:
+            # convert int-like things to an array so genomes[idx] has 2d shape.
+            idx = [int(idx)]
+        except:
+            pass
+        print('type(idx):', type(idx))
+        idx = [idx] if isinstance(idx, int) else idx
         print('idx:', idx)
         print('fits:', self.fits[idx])
         print('ages:', self.ages[idx])
@@ -535,9 +543,9 @@ def make_hyperparameters():
         # fitness threshold tested with 16 stairs, no rise. 0.6935 gets within 1-2 stairs of trophy
         # 0.8091 touches trophy with leg, 0.8823 touches trophy with body.
         fit_thresh=0.7, # fitness victory condition
-        stair_rises=[0, 0.25 * L / 2.5, 0.5 * L / 2.5, 0.75 * L / 2.5, L / 2.5],
-        temp_schedule=[-1, -0.25, 0, 0.25, 1], # scaffolded temp schedule, last entry is temp victory condition
-        use_temp_param=True,
+#         temp_schedule=[-1, -0.25, 0, 0.25, 1], # scaffolded temp schedule, last entry is temp victory condition
+        temp_schedule=[1], # scaffolded temperature schedule, last entry is temp victory condition
+        use_temp_param=False, # True: use evolved temp in combination with scaffolding schedule temperature
         # Evolution Strategy
 #         mutation='evorobo', # change one random param, sigma=param
         mutation='noise', # change all params, sigma~=hp.sigma_init*(sigma_decay**generation)
@@ -545,8 +553,8 @@ def make_hyperparameters():
         sigma=0.1,
 #         eval_time=200, # number of timesteps
         eval_time=2000, # number of timesteps
-#         pop_size=64, # population size
-        pop_size=4, # population size
+        pop_size=64, # population size
+#         pop_size=4, # population size
         max_parallel=8, # max num sims to run simultaneously
         num_gens=1000, # number of generations
 #         num_gens=4,
@@ -575,12 +583,12 @@ for rise in rises:
     '''
     # rises and variations can be used with for loops to try a 
     # variety of rises and scaffolding combinations
-    hp = make_hyperparameters()
-    rises = hp['stair_rises']
+    L = 0.1
+    rises = [0, 0.25 * L / 2.5, 0.5 * L / 2.5, 0.75 * L / 2.5, L / 2.5],
     variations = [ # temp_schedule and use_temp_param
-        (hp['temp_schedule'][-1:], False), # no scaffolding
-        (hp['temp_schedule'], False), # fixed scaffolding
-        (hp['temp_schedule'], True), # evolved scaffolding
+        ([1], False), # no scaffolding
+        ([-1, -0.25, 0, 0.25, 1], False), # fixed scaffolding
+        ([-1, -0.25, 0, 0.25, 1], True), # evolved scaffolding
     ]
 
     if filename is not None:
@@ -639,7 +647,18 @@ def play(filename=None, play_paused=False):
           'best genome temp:', pop.genomes[pop.best_idx, 0])
     print('sorted fits:', np.sort(pop.fits)[::-1])
     
-    pop.play()
+    print('sorted by fitness within schedule temp:')
+    df = (pd.DataFrame({'temp_schedule': pop.temp_schedule[pop.temps_idx], 
+                        'fits': pop.fits, 
+                        'ages': pop.ages,
+                        'pop_idx': pop.pop_idx})
+          .sort_values(['temp_schedule', 'fits'], kind='mergesort', ascending=False).reset_index(drop=True))
+    print(df)
+    
+    pop.eval_time = 4000 # for laughs, watch a robot behave beyond when it was evolved for.
+    pop.play(idx=df.loc[0, 'pop_idx']) # play fittest individual with highest schedule temp
+    pop.play() # play fittest individual
+    pop.play(13) # play arbitrary individual by id
     
     
 def save_model(filename, model):
