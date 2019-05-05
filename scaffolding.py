@@ -15,203 +15,467 @@ import pprint
 import pyrosim
 
 from robot import Robot
-from environment import SpatialScaffoldingStairsEnv
+from environment import send_trophy
 
 
-class ParallelHillClimber:
-    '''
-    Evaluate a population in parallel
-    '''
-    def __init__(self, num_params, pop_size, 
-                 sigma_init=0.1, sigma_decay=0.999, sigma_limit=0.01, 
-                 seed=None, mutation='noise'):
+'''
+Spider:
+
+A spider is a central sphere connected to n legs, where n=2k for some positive integer k. The legs are evenly distributed around the
+xy plane bisecting the sphere.
+
+L is leg length.
+R is leg radius.
+S is sphere radius.
+
+Upper leg angle angle (around circumference of xy plane) of leg i is \theta_i = (2\pi / k) * (i + 1/2).
+Upper leg: x=(S+0.5L)*cos(theta), y=(S+0.5L)*sin(theta), z=L+R. r1=cos(theta), r2=sin(theta), r3=0, r, g, b
+Lower leg: x=(S+L)*cos(theta), y=(S+L)*sin(theta), z=0.5*L+R, r1=0, r2=0, r3=1, r, g, b
+
+Body to upper leg joint: x=S*cos(theta), y=S*sin(theta), z=L+R, n1=-sin(theta), n2=cos(theta), n3=0, lo=-math.pi/2 , hi=math.pi/2
+upper to lower leg joint: x=(S+L)*cos(theta), y=(S+L)*sin(theta), z=L+R, n1=-sin(theta), n2=cos(theta), n3=0, lo=-math.pi/2 , hi=math.pi/2
+'''
+
+class Robot:
+    def __init__(self, weights, num_legs=4, L=1, R=1, S=1, hidden_layer_size=4, num_hidden_layers=0,
+                 use_proprio=False, use_vestib=False, front_angle=0, one_front_leg=False, **kwargs):
         '''
-        mutation: 'noise' adds gaussian noise to every param. 
-          'evorobo' adds noise to one randomly chosen parameter, using sigma=abs(param),
-           and clips the parameter.
+        L: leg length
+        R: leg radius
+        S: body radius
+        one_front_leg: if True, a single leg faces forward. if False, two legs face forward
+        front_angle: in radians. if 0, the front leg/s are in the positive x direction.
+          if pi/2, the front leg/s face the positive y direction.
         '''
-        self.seed = seed
-        self.num_params = num_params
-        self.pop_size = pop_size
+        self.weights = weights
+        self.num_legs = num_legs
+        self.L = L
+        self.R = R
+        self.S = S
+        self.hidden_layer_size = hidden_layer_size
+        self.num_hidden_layers = num_hidden_layers
+        self.use_proprio = use_proprio
+        self.use_vestib = use_vestib
+        self.front_angle = front_angle
+        self.one_front_leg = one_front_leg
+        self.group = 'robot'
+
+    def send_to(self, sim):
+        body, upper_legs, lower_legs, joints = self.send_objects_and_joints(
+            sim, self.num_legs, self.L, self.R, self.S)
+        sensors, p4, l5, vid = self.send_sensors(
+            sim, body, upper_legs, lower_legs, joints, 
+            use_proprio=self.use_proprio, use_vestib=self.use_vestib)
+        self.p4 = p4
+        self.l5 = l5
+        self.v_id = vid # vestibular sensor
+        sensor_neurons, motor_neurons, hidden_layers, bias_neuron = self.send_neurons(
+            sim, sensors, joints, self.hidden_layer_size, self.num_hidden_layers)
+        self.send_synapses(sim, self.weights, sensor_neurons, motor_neurons, hidden_layers, bias_neuron)
+        
+    def send_objects_and_joints(self, sim, num_legs, L, R, S):
+        o0 = sim.send_sphere(x=0, y=0, z=L+R, radius=S, r=0.5, g=0.5, b=0.5,
+                             collision_group=self.group)
+        upper_legs = []
+        lower_legs = []
+        joints = []
+        for i in range(num_legs):
+            theta = ((2 * np.pi / num_legs) * (i + (0 if self.one_front_leg else 0.5)) # (i+0.5): 2 symmetric front legs
+                     + self.front_angle) # rotate the front to face y direction if pi/2
+            upper = sim.send_cylinder(x=(S + 0.5 * L) * np.cos(theta), 
+                                    y=(S + 0.5 * L) * np.sin(theta), 
+                                    z=(L + R), length=L, radius=R, 
+                                    r1=np.cos(theta), r2=np.sin(theta), r3=0,
+                                    r=(1+np.cos(theta))/2, g=0, b=(1+np.sin(theta))/2,
+                                     collision_group=self.group)
+            upper_legs.append(upper)
+            lower = sim.send_cylinder(x=(S + L) * np.cos(theta), 
+                                    y=(S + L) * np.sin(theta),
+                                    z=(0.5 * L + R), length=L, radius=R,
+                                    r1=0, r2=0, r3=1,
+                                    r=(1+np.cos(theta))/4, g=0, b=(1+np.sin(theta))/4,
+                                     collision_group=self.group)
+            lower_legs.append(lower)
+            # body-to-upper-leg joint
+            j0 = sim.send_hinge_joint(first_body_id=o0, second_body_id=upper, 
+                                      x=S*np.cos(theta), y=S*np.sin(theta), z=L + R, 
+                                      n1=-np.sin(theta), n2=np.cos(theta), n3=0, 
+                                      lo=-math.pi/2 , hi=math.pi/2)
+            # upper-to-lower-leg joint
+            j1 = sim.send_hinge_joint(first_body_id=upper, second_body_id=lower, 
+                                      x=(S+L)*np.cos(theta), y=(S+L)*np.sin(theta), z=L + R, 
+                                      n1=-np.sin(theta), n2=np.cos(theta), n3=0, 
+                                      lo=-math.pi/2 , hi=math.pi/2)
+            joints += [j0, j1]
+
+        return o0, upper_legs, lower_legs, joints
+            
+    def send_sensors(self, sim, body, upper_legs, lower_legs, joints, use_proprio=False, use_vestib=False):
+        sensors = []
+        
+        if use_proprio:
+            for joint in joints:
+                sensors.append(sim.send_proprioceptive_sensor(joint))
+            
+        # front leg ray sensors
+        # ...todo
+        
+        # lower limb touch sensors
+        for lower in lower_legs:
+            sensors.append(sim.send_touch_sensor(body_id=lower))
+        
+        # upper limb touch sensors
+#         for upper in upper_legs:
+#             sensors.append(sim.send_touch_sensor(body_id=upper))
+        
+        p4 = sim.send_position_sensor(body_id=body)
+        l5 = sim.send_light_sensor(body_id=body)
+#         sensors.append(l5)
+        vid = sim.send_vestibular_sensor(body_id=body)
+        if use_vestib:
+            sensors.append(vid)
+        
+        return sensors, p4, l5, vid
+
+    def send_neurons(self, sim, sensors, joints, hidden_layer_size, num_hidden_layers):
+        bias_neuron = sim.send_bias_neuron()
+
+        sensor_neurons = []
+        for sensor in sensors:
+            sensor_neurons.append(sim.send_sensor_neuron(sensor_id=sensor))
+            
+        motor_neurons = []
+        for joint in joints:
+            motor_neurons.append(sim.send_motor_neuron(joint_id=joint, tau=0.3))
+            
+        hidden_layers = []
+        for _ in range(num_hidden_layers):
+            hidden_neurons = []
+            for _ in range(hidden_layer_size):
+                hidden_neurons.append(sim.send_hidden_neuron())
+                
+            hidden_layers.append(hidden_neurons)
+            
+        return sensor_neurons, motor_neurons, hidden_layers, bias_neuron
+        
+    def send_synapses(self, sim, weights, sensor_neurons, motor_neurons, hidden_layers, bias_neuron):
+        layers = [sensor_neurons + [bias_neuron]] # add bias to input layer
+        for layer in hidden_layers:
+            layers.append(layer + [bias_neuron]) # add bias to hidden layers
+        layers.append(motor_neurons)
+        
+        pairs = [] # source and target neuron pairs
+        for i in range(len(layers) - 1):
+            in_layer = layers[i]
+            out_layer = layers[i + 1]
+            for inp in in_layer:
+                for out in out_layer:
+                    pairs.append((inp, out))
+            
+        for i, (s, t) in enumerate(pairs):
+            sim.send_synapse(source_neuron_id=s, target_neuron_id=t, weight=weights[i])
+        
+
+class SpatialScaffoldingStairsEnv:
+    '''
+    Floating Stairs with a light source trophy on top.
+    
+    Each stair is placed vertically relative to the previous stair. This is the
+    rise of the stair. The rise of each stair increases from the first stair to
+    the last stair according to the scaffolding schedule. This spatial change in rise
+    is where the term "Spatial Scaffolding" comes from. The rise of the final stair 
+    is always equal to the max_rise.
+    '''
+    def __init__(self, num_stairs, stair_depth, stair_width, stair_thickness, stair_y_offset, 
+                 stair_max_rise, temp=0, stair_temp_scale=4, **kwargs):
+        '''
+        y_offset: y-axis position of the front of the initial stair.
+        max_rise: the maximum rise from one stair to the next.
+        temp: scaffolding temperature. Expected to be roughly in the range -1 to 1, but
+          can range from -inf to inf. 0 means medium scaffolding, 
+          >= 1 means about max_rise for every stair, and <= -1 means about zero
+          rise for every stair except the last.
+        temp_scale: >= 0. multiplied by temp to generate stairs. larger scale means more extreme
+        stairs (either very flat or very steep). At 4, temp=1 corresponds to mostly
+        max_rise stairs and temp=-1 corresponds to mostly no rise stairs (except last).
+        '''
+        self.num_stairs = num_stairs
+        self.depth = stair_depth 
+        self.width = stair_width
+        self.y_offset = stair_y_offset
+        self.thick = stair_thickness # stair thickness
+        self.max_rise = stair_max_rise
+        self.temp = temp
+        self.temp_scale = np.abs(stair_temp_scale)
+        self.group = 'env' # collision group
+        
+    def send_to(self, sim):
+        # normalized stair position (0 to 1)
+        positions = np.arange(self.num_stairs) / (self.num_stairs - 1) 
+        # fraction of max_rise for each stair
+        fracs = np.where(self.temp >= 0,
+                         1 - np.power(1 - positions, np.exp(self.temp_scale * self.temp)),
+                         np.power(positions, np.exp(-self.temp_scale * self.temp)))        
+        rises = fracs * self.max_rise
+        # x, y, z position of each stair
+        stair_coords = [(0, 
+                         self.y_offset + 0.5 * self.depth + i * self.depth,
+                         0.5 * self.thick + rises[:(i+1)].sum()
+                        ) for i in range(self.num_stairs)]
+        stair_ids = []
+        for x, y, z in stair_coords:
+            sid = sim.send_box(x=x, y=y, z=z, 
+                               length=self.depth, width=self.width, height=self.thick,
+                               r=1, g=1, b=1,
+                               collision_group=self.group)
+            stair_ids.append(sid)
+            
+        # fix the stairs in place
+        for sid in stair_ids:
+            sim.send_fixed_joint(sid, -1)
+        
+        # the trophy is the light source
+        self.trophy_pos = (0, stair_coords[-1][1], stair_coords[-1][2] + 0.5 * self.thick)
+        send_trophy(sim, x=self.trophy_pos[0], y=self.trophy_pos[1], z=self.trophy_pos[2],
+                    size=self.thick, collision_group=self.group)
+        
+        self.x_min = -self.width / 2
+        self.x_max = self.width / 2 
+
+    
+class DecayingMutator:    
+    def __init__(self, sigma_init=0.1, sigma_decay=0.999, sigma_limit=0.01, seed=None):
         self.sigma_init = sigma_init
         self.sigma_decay = sigma_decay
         self.sigma_limit = sigma_limit
+        self.seed = seed
         self.sigma = self.sigma_init
-        self.mutation = mutation
         
-        self.sols = None
-        self.fits = None
-        self.next_sols = None
-        self.best_params = None
-        self.best_fit = None
-        self.best_idx = None
-
-    def ask(self):
-        # mutation from class chooses a single weight at random,
-        # adds gaussian noise using sigma=weight, and clips to [-1, 1]
-        # new_weight = random.gauss(self.genome[i, j], math.fabs(self.genome[i, j]))
-        # self.genome[i, j] = np.clip(new_weight, -1, 1)
-
-        if self.sols is None:
-            noise = np.random.randn(self.pop_size, self.num_params) * self.sigma
-            self.next_sols = noise
-        elif self.mutation == 'noise':
-            noise = np.random.randn(self.pop_size, self.num_params) * self.sigma
-            self.next_sols = self.sols + noise
-        elif self.mutation == 'evorobo':
-            # select a random param to mutate from each individual
-            idx = (np.arange(self.pop_size), np.random.choice(self.num_params, size=self.pop_size))
-            # masked noise is based on the magnitude of each parameter
-            mask = np.zeros((self.pop_size, self.num_params))
-            mask[idx] = 1
-            sigma = np.abs(self.sols)
-            noise = np.random.randn(self.pop_size, self.num_params) * sigma * mask
-            # add noise and clip params to [-1, 1]
-            self.next_sols = np.clip(self.sols + noise, -1, 1)
-            # np.clip(self.sols[idx] + np.random.randn(self.pop_size) * sigmas, -1, 1)
-#             print((self.sols - self.next_sols))
-#             print((self.sols - self.next_sols)[np.nonzero(self.sols - self.next_sols)])
-        else:
-            raise Exception('unrecognized mutation method:', self.mutation)
-            
-        # decay sigma
-        if self.sigma > self.sigma_limit:
-            self.sigma = max(self.sigma_limit, self.sigma * self.sigma_decay)
-            
-        return self.next_sols
-                
-    def tell(self, fits):
-        '''
-        compare fitnesses to previous fitnesses. replace if better.
-        '''
-        if self.sols is None:
-            # initial iteration, initialize fitness
-            self.sols = self.next_sols
-            self.fits = fits
-        else:
-            # update population with improved indivs
-            better_idx = (fits > self.fits)
-            print(f'{better_idx.sum()} solutions improved')
-            self.sols[better_idx] = self.next_sols[better_idx]
-            self.fits[better_idx] = fits[better_idx]
-            
-        self.best_idx = self.fits.argmax()
-        self.best_params = self.sols[self.best_idx]
-        self.best_fit = self.fits[self.best_idx]
-        print(f'best_fit: {self.best_fit:.4} best_idx: {self.best_idx}')
-
-    def result(self):
-        return (self.best_params, self.best_fit, self.best_idx)
+    def mutate(self, genomes):
+        noise = np.random.randn(*(genomes.shape)) * self.sigma
+        self.sigma = max(self.sigma_limit, self.sigma * self.sigma_decay) # decay sigma           
+        return genomes + noise
 
 
-class Individual:  
-    def __init__(self, id_, genome, num_legs, L, R, S, eval_time, num_hidden, num_hl, 
-                 use_proprio=False, use_vestib=False, front_angle=0):
-        self.num_legs = num_legs
-        self.L = L
-        self.R = R
-        self.S = S
-        self.eval_time = eval_time
-        # rows=num_sensors=(lower leg touch sensors + light sensor) , cols=num_motors=number of joints
-        self.genome = genome
-        self.id_ = id_
-        self.num_hidden = num_hidden
-        self.num_hl = num_hl
-        self.use_proprio = use_proprio
-        self.use_vestib = use_vestib
-        self.front_angle = front_angle
+class EvoRoboMutator:
+    def __init__(self, seed=None):
+        self.seed = seed
         
-    def start_evaluation(self, env, play_blind=True, play_paused=False):
-        self.env = env # save for fitness
-        self.sim = pyrosim.Simulator(play_paused=play_paused, eval_time=self.eval_time,
-                                     play_blind=play_blind, dt=0.025) # default dt=0.05
-        self.tids = env.send_to(self.sim)
-        robot = Robot(self.sim, weights=self.genome, num_legs=self.num_legs,
-                      L=self.L, R=self.R, S=self.S, num_hidden=self.num_hidden, 
-                      num_hidden_layers=self.num_hl, 
-                      use_proprio=self.use_proprio, use_vestib=self.use_vestib,
-                      front_angle=self.front_angle)
-        self.position_sensor_id = robot.p4
-        self.distance_sensor_id = robot.l5 # distance from light source
-        self.v_id = robot.v_id # body vestibular sensor
-        self.sim.assign_collision(robot.group, env.group)
-        self.sim.start()
-
-    def compute_fitness(self):
-        self.sim.wait_to_finish()
-            
-        # distance to trophy fitness
-        x_pos = self.sim.get_sensor_data(sensor_id=self.position_sensor_id, svi=0)[-1]
-        y_pos = self.sim.get_sensor_data(sensor_id=self.position_sensor_id, svi=1)[-1]
-        z_pos = self.sim.get_sensor_data(sensor_id=self.position_sensor_id, svi=2)[-1]
-        robot_pos = np.array([x_pos, y_pos, z_pos])
-        goal_pos = np.array(self.env.trophy_pos)
-        dist = np.sqrt(np.dot(robot_pos - goal_pos, robot_pos - goal_pos))
-        dist_fitness = 1 / (dist + 1)
-        del self.sim # so deepcopy does not copy the simulator
-        return dist_fitness
+    def mutate(self, genomes):
+        num_genomes, num_params = genomes.shape
+        # select a random param to mutate from each individual
+        idx = (np.arange(num_genomes), np.random.choice(num_params, size=num_genomes))
+        # masked noise is based on the magnitude of each parameter
+        mask = np.zeros(genomes.shape)
+        mask[idx] = 1
+        sigma = np.abs(genomes)
+        noise = np.random.randn(*(genomes.shape)) * sigma * mask
+        # add noise and clip params to [-1, 1]
+        return np.clip(genomes + noise, -1, 1)
 
 
-class Evaluator:
-    '''
-    A configurable fitness function that evaluates a population of solutions.
-    '''
-    def __init__(self, num_legs, L, R, S, eval_time, env, num_hidden, num_hl, max_parallel=None,
-                 use_proprio=False, use_vestib=False, front_angle=0, **kwargs):
+class ScaffoldingPopulation:
+    def __init__(self, num_params, pop_size, sigma, mutator, fit_thresh, temp_schedule=None, use_temp_param=False, 
+                 seed=None, max_parallel=None, eval_time=None, **kwargs):
         '''
-        max_parallel: run up to max_parallel simulations simultaneously. If none, run all simulations 
-        simultaneously. (My puny laptop struggles w/ >40).
+        temp_schedule: scaffolding schedule. list of temperatures. default [1].
+        use_temp_param: if False, env.temp = scaffolding temp. 
+          if True, env.temp = max(temp param, scaffolding temp)
         '''
-        self.num_legs = num_legs
-        self.L = L
-        self.R = R
-        self.S = S
-        self.eval_time = eval_time
-        self.env = env
-        self.num_hidden = num_hidden
-        self.num_hl = num_hl
+        self.num_params = num_params
+        self.pop_size = pop_size
+        self.sigma = sigma
+        self.mutator = mutator
+        self.fit_thresh = fit_thresh
+        self.temp_schedule = np.array(temp_schedule if temp_schedule is not None else [1])
+        self.temp_thresh = temp_schedule[-1]
+        self.use_temp_param = use_temp_param
+        self.seed = seed
         self.max_parallel = max_parallel
-        self.use_proprio = use_proprio
-        self.use_vestib = use_vestib
-        self.front_angle = front_angle
+        self.eval_time = eval_time
+        self.kwargs = kwargs
         
-    def __call__(self, solutions, play_blind=True, play_paused=False):
+        self.pop_idx = np.arange(self.pop_size)
+        
+    def reset(self):
+        self.history = []
+        self.gen = 0 # generation 0
+        self.temps_idx = np.zeros(self.pop_size, dtype=int) # index of current scaffolding temp of indivs
+        self.ages = np.zeros(self.pop_size, dtype=int) # total gens a lineage has evolved for
+        self.dones = np.zeros(self.pop_size, dtype=bool) # if an indiv is done evolving
+        self.fits = np.full(self.pop_size, np.nan, dtype=float)
+        self.genomes = np.random.randn(self.pop_size, self.num_params) * self.sigma
+        
+        # update genome temp based on scaffolding temp and use_temp_param
+        self.genomes[:, 0] = self.env_temps(self.genomes, self.temps_idx) 
+        
+        # evaluate fitness, replace as needed, and report replacements
+        self.update_fitness()
+        # find new done genomes, update dones, and report.
+        self.update_dones()
+        self.update_best()
+        
+    def step(self):
         '''
-        solutions: 2d array of params: (pop_size, num_params)
+        for not-yet-done genomes: increase age, mutate genome, fix up temp, evaluate fitness. 
+        for fitter genomes: replace genome, replace fitness
+        for fitter (or all) genomes: update dones, update temps_idx and fitness
+        for each individual, if not done, make next genome, evaluate fitness using curr scaffolding temp (and temp param). if fitness passes threshold: if temp passes threshold, done, else, increase scaffolding temp.
         '''
-        # for backwards compatibility with saved evaluators missing these attributes
-        if not hasattr(self, 'num_hl'):
-            self.num_hl = 0
-        if not hasattr(self, 'use_proprio'):
-            self.use_proprio = False
-        if not hasattr(self, 'use_vestib'):
-            self.use_vestib = False
-        if not hasattr(self, 'front_angle'):
-            self.front_angle = 0
+        self.gen += 1
+        
+        self.update_scaffolding_temp()
+        self.update_genome_temp()
+        
+        nan_idx = self.pop_idx[np.isnan(self.fits)] # basically genomes with updated scaffolding temps
+        nan_genomes = self.genomes[nan_idx]
+        
+        mutation_idx = self.pop_idx[(self.dones == False) & (np.isnan(self.fits) == False)]
+        mutated_genomes = self.mutator.mutate(self.genomes[mutation_idx])
+        mutated_genomes[:, 0] = self.env_temps(mutated_genomes, self.temps_idx[mutation_idx]) # fix temps
+
+        next_idx = np.hstack([nan_idx, mutation_idx])
+        next_genomes = np.vstack([nan_genomes, mutated_genomes])
+        
+        self.update_fitness(next_genomes, next_idx)
+        self.update_dones()
+        self.update_best()
+                    
+    def update_fitness(self, genomes=None, idx=None):
+        '''
+        genomes: genomes to be evaluated
+        idx: index into full population of genomes to be compared
+        and potentially replaced.
+        '''
+        genomes = self.genomes if genomes is None else genomes
+        idx = self.pop_idx if idx is None else idx
+        fits = self.evaluate(genomes)
+        better_fits_idx = np.isnan(self.fits)[idx] | (fits > self.fits[idx])
+        better_idx = self.pop_idx[idx][better_fits_idx]
+        if len(better_idx) > 0:
+            print('better_idx:', better_idx)
+            self.genomes[better_idx] = genomes[better_fits_idx]
+            self.fits[better_idx] = fits[better_fits_idx]
+            self.ages[better_idx] = self.gen
+            self.history.append({'gen': self.gen, 
+                                 'better_idx': better_idx, 
+                                 'better_genomes': self.genomes[better_idx],
+                                 'better_fits': self.fits[better_idx],
+                                 'better_temps_idx': self.temps_idx[better_idx],
+                                 'better_ages': self.ages[better_idx],
+                                })
+        
+    def update_dones(self):
+        # done when fitness and temperature are good enough
+        next_dones = (self.genomes[:, 0] >= self.temp_thresh) & (self.fits >= self.fit_thresh)
+        new_dones_idx = self.pop_idx[(self.dones == False) & next_dones]
+        if len(new_dones_idx) > 0:
+            print('new_dones_idx:', new_dones_idx)
+            self.dones = next_dones
+            self.history.append({'gen': self.gen, 
+                                 'dones_idx': self.pop_idx[self.dones],
+                                 'new_dones_idx': new_dones_idx,
+                                })
             
-        fitnesses = np.zeros(len(solutions)) # fitnesses
+    def update_best(self):
+        old_best_idx = self.best_idx if hasattr(self, 'best_idx') else None
+        old_best_fit = self.best_fit if hasattr(self, 'best_fit') else None
+        self.best_idx = self.fits.argmax()
+        self.best_fit = self.fits[self.best_idx]
+        self.best_genome = self.genomes[self.best_idx]
+        self.best_age = self.ages[self.best_idx]
+        if old_best_idx != self.best_idx or old_best_fit != self.best_fit:
+            print('best_idx:', self.best_idx, 'best_fit:', self.best_fit,
+                  'best_age:', self.best_age, 'best temps_idx:', self.temps_idx[self.best_idx],
+                  'best scaffolding temp:', self.temp_schedule[self.temps_idx[self.best_idx]],
+                  'best genome temp:', self.genomes[self.best_idx, 0], 
+                 )
+            self.history.append({'gen': self.gen, 
+                                 'best_idx': self.best_idx,
+                                 'best_fit': self.best_fit,
+                                 'best_genome': self.best_genome,
+                                 'best_age': self.best_age,
+                                })
+            
+    def update_scaffolding_temp(self):
+        # increment scaffolding when fitness is good enough
+        inc_scaf_idx = self.pop_idx[(self.fits > self.fit_thresh) & (self.dones == False)]
+        if len(inc_scaf_idx) > 0:
+            print('inc_scaf_idx:', inc_scaf_idx)
+            self.temps_idx[inc_scaf_idx] += 1
+            self.history.append({'gen': self.gen, 
+                                 'inc_scaf_idx': inc_scaf_idx,
+                                })
+            
+    def update_genome_temp(self):
+        # genomes whose scaffolding temp is greater than their genome temp
+        # (because their scaffolding temp was increased)
+        idx = self.pop_idx[(self.genomes[:, 0] < self.temp_schedule[self.temps_idx])]
+        if len(idx) > 0:
+            print('update_genome_temp_idx:', idx)
+            self.genomes[idx, 0] = self.temp_schedule[self.temps_idx][idx]
+            self.fits[idx] = np.nan
+            self.history.append({'gen': self.gen, 
+                                 'update_genome_temp_idx': idx,
+                                })
+                
+    def env_temps(self, genomes, temps_idx):
+        temps = self.temp_schedule[temps_idx] # scaffolding temperature of environment
+        if self.use_temp_param:
+            # genome can evolve to use a higher temperature
+            return np.where(genomes[:, 0] > temps, genomes[:, 0], temps)
+        else:
+            return temps
+
+    def play(self, idx=None, play_paused=False):
+        # convert None to [int] so genomes[idx] has 2d shape.
+        idx = [self.best_idx] if idx is None else idx
+        print('idx:', idx)
+        print('fits:', self.fits[idx])
+        print('ages:', self.ages[idx])
+        print('dones:', self.dones[idx])
+        print('genome temps:', self.genomes[idx, 0])
+        print('temps_idx:', self.temps_idx[idx])
+        print('scaffold temps:', self.temp_schedule[self.temps_idx[idx]])
+        self.evaluate(self.genomes[idx], play_blind=False, play_paused=play_paused)
         
-        # process solutions in batches of size batch_size
-        batch_size = len(solutions) if self.max_parallel is None else self.max_parallel
-        for start_i in range(0, len(solutions), batch_size):
-            indivs = []
-            for i in range(start_i, min(start_i + batch_size, len(solutions))):
-                genome = solutions[i]
-                indiv = Individual(i, genome, self.num_legs, self.L, self.R, self.S, self.eval_time,
-                                   self.num_hidden, self.num_hl, 
-                                   use_proprio=self.use_proprio, use_vestib=self.use_vestib,
-                                   front_angle=self.front_angle)
-                indivs.append(indiv)
-
-            for indiv in indivs:
-                indiv.start_evaluation(self.env, play_blind=play_blind, play_paused=play_paused)
-
-            for i, indiv in enumerate(indivs):
-                fitnesses[start_i + i] = indiv.compute_fitness()
-
+    def evaluate(self, genomes, play_blind=True, play_paused=False):
+        robots = [Robot(weights=genomes[i, 1:], **self.kwargs) for i in range(len(genomes))]
+        envs = [SpatialScaffoldingStairsEnv(temp=genomes[i, 0], **self.kwargs) for i in range(len(genomes))]
+        fitnesses = np.zeros(len(genomes)) # fitnesses
+        
+        # process simulations in batches
+        batch_size = len(genomes) if self.max_parallel is None else self.max_parallel
+        for start_i in range(0, len(genomes), batch_size):
+            end_i = min(start_i + batch_size, len(genomes))
+            batch_robots = robots[start_i:end_i]
+            batch_env = envs[start_i:end_i]
+            batch_sims = [pyrosim.Simulator(play_paused=play_paused, eval_time=self.eval_time,
+                                            play_blind=play_blind, dt=0.025) # default dt=0.05
+                          for i in range(start_i, end_i)]
+            
+            # start a batch of simulations
+            for robot, env, sim in zip(batch_robots, batch_env, batch_sims):
+                env.send_to(sim)
+                robot.send_to(sim)
+                sim.assign_collision(robot.group, env.group)
+                sim.start()
+                
+            for j, (robot, env, sim) in enumerate(zip(batch_robots, batch_env, batch_sims)):
+                sim.wait_to_finish()
+                # distance to trophy fitness
+                x_pos = sim.get_sensor_data(sensor_id=robot.p4, svi=0)[-1]
+                y_pos = sim.get_sensor_data(sensor_id=robot.p4, svi=1)[-1]
+                z_pos = sim.get_sensor_data(sensor_id=robot.p4, svi=2)[-1]
+                robot_pos = np.array([x_pos, y_pos, z_pos])
+                goal_pos = np.array(env.trophy_pos)
+                dist = np.sqrt(np.dot(robot_pos - goal_pos, robot_pos - goal_pos))
+                fitness = 1 / (dist + 1)
+                fitnesses[start_i + j] = fitness
+                
         return fitnesses
-
-
+        
+    
 def make_hyperparameters():
     '''
     Return a dictionary of the experimental hyperparameters.
@@ -227,8 +491,8 @@ def make_hyperparameters():
         R=L / 5, # leg radius
         S=L / 2, # body radius
         num_legs=5,
-        num_hidden=3, # 6
-        num_hl=0, # number of hidden layers
+        hidden_layer_size=3,
+        num_hidden_layers=0, # number of hidden layers
         use_proprio=True,
         use_vestib=True,
         front_angle=np.pi/2, # pi/2 = face the y-direction
@@ -239,122 +503,108 @@ def make_hyperparameters():
         stair_thickness=L / 2.5,
         stair_y_offset=L * 2,
         stair_max_rise=L / 2.5, # L/2.5 seems hard but doable. Maybe 2*L/2.5 is stretch goal
-        stair_initial_temp=1,
         stair_temp_scale=4,
+        # Scaffolding
+        # fitness threshold tested with 16 stairs, no rise. 0.6935 gets within 1-2 stairs of trophy
+        # 0.8091 touches trophy with leg, 0.8823 touches trophy with body.
+        fit_thresh=0.7, # fitness victory condition
+        stair_rises=[0, 0.25 * L / 2.5, 0.5 * L / 2.5, 0.75 * L / 2.5, L / 2.5],
+        temp_schedule=[-1, -0.25, 0, 0.25, 1], # scaffolded temp schedule, last entry is temp victory condition
+        use_temp_param=False,
         # Evolution Strategy
-        strategy='phc',
 #         mutation='evorobo', # change one random param, sigma=param
         mutation='noise', # change all params, sigma~=hp.sigma_init*(sigma_decay**generation)
         sigma_init=0.1, # mutation noise
+        sigma=0.1,
 #         eval_time=200, # number of timesteps
         eval_time=2000, # number of timesteps
 #         pop_size=64, # population size
-        pop_size=8, # population size
+        pop_size=4, # population size
         max_parallel=8, # max num sims to run simultaneously
 #         num_gens=1000, # number of generations
-        num_gens=10,
+        num_gens=4,
     )
     
-    # hyperparameter configuration
     # calculate number of params
     # make a list of nodes in each layer and calculate the weights between the layers
     # input node count: proprioceptive sensors + touch sensors + vestigial sensor + bias
     # hidden node count: hidden nodes + bias
     # output node count: joints/motors
-    nodes = np.array([3 * hp['num_legs'] + 2] + [hp['num_hidden'] + 1] * hp['num_hl'] + [hp['num_legs'] * 2])
-    hp['num_params'] = (nodes[:-1] * nodes[1:]).sum()        
+    nodes = np.array([3 * hp['num_legs'] + 2] + [hp['hidden_layer_size'] + 1] * hp['num_hidden_layers']
+                     + [hp['num_legs'] * 2])
+    num_robot_params = (nodes[:-1] * nodes[1:]).sum()
+    hp['num_params'] = num_robot_params + 1  # 1 param for scaffolding temp    
     return hp
 
-    
+  
 def train(filename=None, play_paused=False):
-
-    # case 1: load full model and resume training
-    # case 2: create new model and start training
-    # case 3: not implemented. load model and use new hp, env, etc.
-
-    # load model
-    if filename is not None:
-        hp, params, evaluator, solver, history, state = load_model(filename)
-    else:
-        hp = make_hyperparameters()
-        state = {} # training state. Used to restore training and save training history.
-    
-        env = SpatialScaffoldingStairsEnv(
-            num_stairs=hp['num_stairs'], depth=hp['stair_depth'], 
-            width=hp['stair_width'], thickness=hp['stair_thickness'],
-            y_offset=hp['stair_y_offset'], max_rise=hp['stair_max_rise'],
-            temp=hp['stair_initial_temp'], temp_scale=hp['stair_temp_scale'])
-
-        evaluator = Evaluator(env=env, **hp)
-        state['env'] = copy.deepcopy(env)
-        state['evaluator'] = copy.deepcopy(evaluator)
-        state['history'] = []
-        state['gen'] = -1
-        
-        solver = ParallelHillClimber(hp['num_params'], hp['pop_size'], 
-                                     sigma_init=hp['sigma_init'], mutation=hp['mutation'])
-
-    print('Experiment', hp["exp_id"])
-    print('legs:', hp["num_legs"], 'hidden units:', hp["num_hidden"], 
-          'hidden layers:', hp["num_hl"], 'params:', hp["num_params"])
-    
-    env = copy.deepcopy(state['env'])
-        
-    # start or restart evolution
-    for gen in range(state['gen'] + 1, hp['num_gens']):
-        gen_start_time = datetime.datetime.now()
-        state['gen'] = gen
-        story = {'gen': gen} # track history
-        solutions = solver.ask() # shape: (pop_size, num_params)
-        fitnesses = evaluator(solutions, play_blind=True, play_paused=False)
-        story['fitnesses'] = copy.deepcopy(fitnesses)
-        solver.tell(fitnesses)
-        print(f'============\ngen: {gen}')
-        print(f'fitnesses: {np.sort(fitnesses)[::-1]}')
-        result = solver.result() # first element is the best solution, second element is the best fitness
-        story['result'] = copy.deepcopy(result) # too heavy b/c of params?
-        for attr in ['fits', 'ages', 'lineage', 'best_idx', 'best_age', 'best_fit', 'sigma']:
-            if hasattr(solver, attr):
-                story[attr] = copy.deepcopy(getattr(solver, attr))
+    '''
+for rise in rises:
+    make an unscaffolded population (a population with stair min_temp=1)
+    train unscaffolded population for 1000 generations or until done (evaluator only simulates fitness of non-done individuals)
+    make a scaffolded population (a population with temps schedule)
+    train scaffolded population for 1000 generations or until done.
+        for each individual, if not done, make next genome, evaluate fitness using curr scaffolding temp (and temp param). if fitness passes threshold: if temp passes threshold, done, else, increase scaffolding temp.
+    '''
+    hp = make_hyperparameters()
+    rises = hp['stair_rises']
+    for max_rise in rises:
+        variations = [
+            (hp['temp_schedule'][-1:], False), # no scaffolding
+            (hp['temp_schedule'], False), # fixed scaffolding
+            (hp['temp_schedule'], True), # evolved scaffolding
+        ]
+        for temp_schedule, use_temp_param in variations:
+            hp = make_hyperparameters()
+            hp['stair_max_rise'] = max_rise
+            hp['temp_schedule'] = temp_schedule
+            hp['use_temp_param'] = use_temp_param
+            
+            print('stair_max_rise:', hp['stair_max_rise'])
+            print('temp_schedule:', hp['temp_schedule'])
+            print('use_temp_param', hp['use_temp_param'])
+            
+            if hp['mutation'] == 'noise':
+                mutator = DecayingMutator(sigma_init=hp['sigma_init'])
+            elif hp['mutation'] == 'evorobo':
+                mutator = EvoRoboMutator()
+            
+            pop = ScaffoldingPopulation(mutator=mutator, **hp)
+            pop.reset()
+            while pop.gen < hp['num_gens']:
+                pop.step()
                 
-        gen_end_time = datetime.datetime.now()
-        gen_time = gen_end_time - gen_start_time
-        story['gen_time'] = gen_time
-        print('gen_time:', gen_time)
-        story['result_fitness'] = copy.deepcopy(result[1])
-        state['history'].append(story)
-        if hp['checkpoint_step'] is not None and (gen + 1) % hp['checkpoint_step'] == 0:
-            print('Saving checkpoint at gen', gen)
-            params = solver.result()[0]
-            save_model('robot.pkl', hp, params, evaluator, solver, state['history'], state)
-            save_model('experiments/' + hp['exp_id'] + '_robot.pkl', hp, params, evaluator, solver, state['history'], state)
-    
-    print('state:')
-    pprint.pprint(state)
-    params = solver.result()[0]
-    solutions = np.expand_dims(params, axis=0)
-    fits = evaluator(solutions, play_blind=False, play_paused=play_paused)    
-    save_model('robot.pkl', hp, params, evaluator, solver, state['history'], state)
-    save_model('experiments/' + hp['exp_id'] + '_robot.pkl', hp, params, evaluator, solver, state['history'], state)
-    
+                if hp['checkpoint_step'] is not None and pop.gen % hp['checkpoint_step'] == 0:
+                    model = {'hp': hp, 'pop': pop}
+                    save_model('population.pkl', model)
+                    save_model('experiments/' + hp['exp_id'] + '_robot.pkl', model)
+                    print('Saved model at gen', pop.gen)
+            
+            pop.play()
+            model = {'hp': hp, 'pop': pop}
+            save_model('population.pkl', model)
+            save_model('experiments/' + hp['exp_id'] + '_robot.pkl', model)
+            print('Saved model at gen', pop.gen)
+            
     
 def play(filename=None, play_paused=False):
     if filename is None:
-        filename = 'robot.pkl'
+        filename = 'population.pkl'
         
-    hp, params, evaluator, *etc = load_model(filename)
-    solutions = np.expand_dims(params, axis=0)
-#     evaluator.eval_time = 4000
-#     evaluator.env.num_stairs = 10
-
+    model = load_model(filename)
+    hp = model['hp']
+    pop = model['population']
+        
     # print hyperparams
     for k, v in hp.items():
         print(k, ':', v)
-
-    evaluator(solutions, play_blind=False, play_paused=play_paused)
+    
+    # print history
+    pprint.pprint(pop.history)
+    pop.play()
     
     
-def save_model(filename, *model):
+def save_model(filename, model):
     with open(filename, 'wb') as fh:
         pickle.dump(model, fh)
         
@@ -378,9 +628,7 @@ if __name__ == '__main__':
 #         hp, params, evaluator = load_model(args.restore)
         
     if args.action == 'train':
-        for i in range(1):
-            print(f'experiment #{i}')
-            train(args.restore, play_paused=args.play_paused)
+        train(args.restore, play_paused=args.play_paused)
     elif args.action == 'play':
         play(args.restore, play_paused=args.play_paused)
         
