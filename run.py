@@ -169,15 +169,15 @@ def make_hyperparameters():
         L=L, # leg length
         R=L / 5, # leg radius
         S=L / 2, # body radius
-        num_legs=8,
+        num_legs=5,
         num_hidden=4, # 6
         num_hl=0, # number of hidden layers
         use_proprio=True,
         use_vestib=True,
         front_angle=np.pi/2, # pi/2 = face the y-direction
-#         obstacle='scaffolding_stairs',
+        obstacle='scaffolding_stairs',
 #         obstacle='stairs',
-        obstacle='angled_lattice',
+#         obstacle='angled_lattice',
 #         obstacle='angled_ladder',
         # ladder
         length=L * 10,
@@ -227,7 +227,7 @@ def make_hyperparameters():
 #         elite_ratio=0.2,
 #         eval_time=200, # number of timesteps
         eval_time=2000, # number of timesteps
-        pop_size=64, # population size
+        pop_size=1, # population size
 #         pop_size=256, # ~same # of lineages as 1000gen afpo
 #         pop_size=1, # population size
         # 2 = ~28-29 sec
@@ -340,7 +340,7 @@ def train(filename=None, play_paused=False):
             env.angle = angle # this makes my inner functional programmer cry
             evaluator = Evaluator(env=env, **hp)
 
-        fitnesses = evaluator(solutions, play_blind=True, play_paused=False)
+        fitnesses = evaluator(solutions, play_blind=False, play_paused=True)
         story['fitnesses'] = copy.deepcopy(fitnesses)
         solver.tell(fitnesses)
         print(f'============\ngen: {gen}')

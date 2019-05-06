@@ -1,21 +1,20 @@
-'''
-
-'''
-
 
 import argparse
 import copy
 import datetime
 import math
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 import numpy as np
 import pandas as pd
+from pathlib import Path
 import pickle
 import random
 import pprint
+import seaborn as sns
 
 import pyrosim
 
-from robot import Robot
 from environment import send_trophy
 
 
@@ -544,7 +543,7 @@ def make_hyperparameters():
         # 0.8091 touches trophy with leg, 0.8823 touches trophy with body.
         fit_thresh=0.7, # fitness victory condition
 #         temp_schedule=[-1, -0.25, 0, 0.25, 1], # scaffolded temp schedule, last entry is temp victory condition
-        temp_schedule=[1], # scaffolded temperature schedule, last entry is temp victory condition
+        temp_schedule=[1.], # scaffolded temperature schedule, last entry is temp victory condition
         use_temp_param=False, # True: use evolved temp in combination with scaffolding schedule temperature
         # Evolution Strategy
 #         mutation='evorobo', # change one random param, sigma=param
@@ -553,8 +552,8 @@ def make_hyperparameters():
         sigma=0.1,
 #         eval_time=200, # number of timesteps
         eval_time=2000, # number of timesteps
-        pop_size=64, # population size
-#         pop_size=4, # population size
+#         pop_size=64, # population size
+        pop_size=4, # population size
         max_parallel=8, # max num sims to run simultaneously
         num_gens=1000, # number of generations
 #         num_gens=4,
@@ -604,10 +603,10 @@ for rise in rises:
 
         pop = ScaffoldingPopulation(mutator=mutator, **hp)
         pop.reset()
-           
-    print('stair_max_rise:', hp['stair_max_rise'])
-    print('temp_schedule:', hp['temp_schedule'])
-    print('use_temp_param', hp['use_temp_param'])
+
+    for key in ['stair_max_rise', 'temp_schedule', 'use_temp_param', 'num_params', 'num_legs']:
+        print(key, hp[key])
+
     train_population(hp, pop)
                 
 def train_population(hp, pop):
@@ -655,10 +654,10 @@ def play(filename=None, play_paused=False):
           .sort_values(['temp_schedule', 'fits'], kind='mergesort', ascending=False).reset_index(drop=True))
     print(df)
     
-    pop.eval_time = 4000 # for laughs, watch a robot behave beyond when it was evolved for.
-    pop.play(idx=df.loc[0, 'pop_idx']) # play fittest individual with highest schedule temp
+#     pop.eval_time = 4000 # for laughs, watch a robot behave beyond when it was evolved for.
+    pop.play(idx=df.loc[0, 'pop_idx']) # play the fittest individual from among those with the highest schedule temp
     pop.play() # play fittest individual
-    pop.play(13) # play arbitrary individual by id
+#     pop.play(13) # play arbitrary individual by id
     
     
 def save_model(filename, model):
@@ -674,10 +673,118 @@ def load_model(filename):
         
     return model
 
+def analyze(filename, **kwargs):
+    if filename is None:
+        filename = 'population.pkl'
+        
+    model = load_model(filename)
+    hp = model['hp']
+    pop = model['pop']
+    
+    exp_id = hp['exp_id']
+    if exp_id in ['exp_20190505_024155', 'exp_20190505_144957']:
+        exp_kind = 'ns' # not scaffolded
+    elif exp_id in ['exp_20190505_024129']:
+        exp_kind = 'es' # evolved scaffolding
+    elif exp_id in ['']:
+        exp_kind = 'ss' # strict scaffolding
+                  
+    fits = np.zeros((hp['num_gens']+1, pop.pop_size))
+    gens = np.arange(hp['num_gens']+1)
+    seen_gens = set()
+    for story in pop.history:
+        gen = story['gen']
+        if gen > 0 and gen not in seen_gens:
+            seen_gens.add(gen)
+            # propagate fitnesses to next generation
+            fits[gen, :] = fits[gen - 1, :]
+            
+        if 'better_idx' in story:
+            idx = story['better_idx']
+            # update fitnesses
+#             print(story['better_fits'])
+            fits[gen, idx] = story['better_fits']
+#         gens.setdefault(gen, {})
 
+    mean_init_fit = fits[0].mean()
+    mean_fit = fits[-1].mean()
+    
+    # sorted by schedule temp and then fitness
+    temp_fit_df = (pd.DataFrame({'temp_schedule': pop.temp_schedule[pop.temps_idx], 
+                        'fits': pop.fits, 
+                        'ages': pop.ages,
+                        'pop_idx': pop.pop_idx})
+          .sort_values(['temp_schedule', 'fits'], kind='mergesort', ascending=False).reset_index(drop=True))
+    print('top ten', temp_fit_df[:10])
+    
+    
+    # plot fitness history of all genomes
+    plot_fitness_history(gens, fits, title='Fitness Evolution of Genomes')
+    
+    # plot fitness distribution of population
+#     sns.kdeplot(fits[-1], shade=True, cut=0)
+#     sns.rugplot(fits[-1])
+    sns.distplot(fits[-1], rug=True)
+    plt.title('Population Fitness Distribution')
+    plt.xlabel('Fitness')
+    plt.ylabel('Genome Count')
+    plt.axvline(0.7, color='r', linestyle='dashed', linewidth=1, label='fitness threshold')
+    plt.show()
+
+    # plot fitness history of top-ten genomes (temp + fit)
+    top_10_idx = temp_fit_df[:10]['pop_idx']
+    print('top_10_idx', top_10_idx)
+    plot_fitness_history(gens, fits[:, top_10_idx], 
+                         title='Fitness Evolution of Top Ten Genomes', 
+                         mean_init_fit=mean_init_fit,
+                         mean_fit=mean_fit,
+                        )
+    
+    if exp_kind in ['es', 'ss']:
+        # genomes with the max scaffolding temp
+        max_temp = pop.temp_schedule[pop.temps_idx.max()]
+        max_temp_idx = pop.pop_idx[pop.temps_idx == pop.temps_idx.max()]
+        # plot fitness history of max temp genomes
+        plot_fitness_history(gens, fits[:, max_temp_idx], 
+                             title=f'Fitness Evolution of Best ({max_temp:.2}) Temperature Genomes', 
+                             mean_init_fit=mean_init_fit,
+                             mean_fit=mean_fit,
+                            )
+    
+        # plot counts of temps_idx, to see how the population as a whole progressed
+        temps_counts = np.bincount(pop.temps_idx, minlength=len(pop.temp_schedule))
+        temps_props = temps_counts / temps_counts.sum() # proportion of population
+        print('temps_counts', temps_counts)
+        plt.bar(np.arange(len(temps_counts)), temps_props, tick_label=pop.temp_schedule)
+        plt.title('Population Distribution by Scaffolding Temperature')
+        plt.ylabel('Population Proportion')
+        plt.title('Scaffolding Temperature')
+        plt.ylim(0, 1.)
+        plt.show()
+
+def plot_fitness_history(gens, fits, title='Evolution of Genome Fitness', 
+                         mean_init_fit=None, mean_fit=None):
+    for i in range(fits.shape[1]):
+        plt.plot(gens, fits[:, i])
+        
+    plt.axhline(0.7, color='r', linestyle='dashed', linewidth=1, label='fitness threshold')
+    if mean_init_fit is not None:
+        plt.axhline(mean_init_fit, color='k', linestyle='dashed', linewidth=1, label='mean initial fitness')
+    if mean_fit is not None:
+        plt.axhline(mean_fit, color='b', linestyle='dashed', linewidth=1, label='mean fitness')
+        
+    plt.title(title)
+    plt.xlabel('generation')
+    plt.ylabel('fitness')
+    plt.legend()
+    plt.show()
+        
+#         print('gen', story['gen'], sorted(story.keys()))
+
+    
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='train and evaluate')
-    parser.add_argument('action', choices=['train', 'play'], default='train')
+    parser.add_argument('action', choices=['train', 'play', 'analyze'], default='train')
     parser.add_argument('--restore', metavar='FILENAME', help='load and use a saved model')
     parser.add_argument('--play-paused', default=False, action='store_true')
     args = parser.parse_args()
@@ -690,4 +797,6 @@ if __name__ == '__main__':
         train(args.restore, play_paused=args.play_paused)
     elif args.action == 'play':
         play(args.restore, play_paused=args.play_paused)
+    elif args.action == 'analyze':
+        analyze(args.restore, play_paused=args.play_paused)
         
