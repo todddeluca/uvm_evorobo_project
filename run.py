@@ -386,6 +386,9 @@ def play(filename=None, play_paused=False):
         filename = 'robot.pkl'
         
     hp, params, evaluator, *etc = load_model(filename)
+    if len(etc) > 0:
+        solver, *etc = etc
+        print('best fitness:', solver.result()[1])
     solutions = np.expand_dims(params, axis=0)
 #     evaluator.eval_time = 4000
 #     evaluator.env.num_stairs = 10

@@ -471,7 +471,7 @@ class ScaffoldingPopulation:
         print('genome temps:', self.genomes[idx, 0])
         print('temps_idx:', self.temps_idx[idx])
         print('scaffold temps:', self.temp_schedule[self.temps_idx[idx]])
-        self.evaluate(self.genomes[idx], play_blind=False, play_paused=play_paused)
+        return self.evaluate(self.genomes[idx], play_blind=False, play_paused=play_paused)
         
     def evaluate(self, genomes, play_blind=True, play_paused=False):
         robots = [Robot(weights=genomes[i, 1:], **self.kwargs) for i in range(len(genomes))]
@@ -552,8 +552,8 @@ def make_hyperparameters():
         sigma=0.1,
 #         eval_time=200, # number of timesteps
         eval_time=2000, # number of timesteps
-#         pop_size=64, # population size
-        pop_size=4, # population size
+        pop_size=128, # population size
+#         pop_size=4, # population size
         max_parallel=8, # max num sims to run simultaneously
         num_gens=1000, # number of generations
 #         num_gens=4,
@@ -594,6 +594,7 @@ for rise in rises:
         model = load_model(filename)
         hp = model['hp']
         pop = model['pop']
+        pprint.pprint(hp)
     else:
         hp = make_hyperparameters()
         if hp['mutation'] == 'noise':
@@ -601,11 +602,9 @@ for rise in rises:
         elif hp['mutation'] == 'evorobo':
             mutator = EvoRoboMutator()
 
+        pprint.pprint(hp)
         pop = ScaffoldingPopulation(mutator=mutator, **hp)
         pop.reset()
-
-    for key in ['stair_max_rise', 'temp_schedule', 'use_temp_param', 'num_params', 'num_legs']:
-        print(key, hp[key])
 
     train_population(hp, pop)
                 
@@ -654,11 +653,13 @@ def play(filename=None, play_paused=False):
           .sort_values(['temp_schedule', 'fits'], kind='mergesort', ascending=False).reset_index(drop=True))
     print(df)
     
-#     pop.eval_time = 4000 # for laughs, watch a robot behave beyond when it was evolved for.
-    pop.play(idx=df.loc[0, 'pop_idx']) # play the fittest individual from among those with the highest schedule temp
-    pop.play() # play fittest individual
-#     pop.play(13) # play arbitrary individual by id
-    
+    pop.genomes[:, 0] = pop.temp_schedule[-1] # watch robots play at max temp
+#     fit = pop.eval_time = 4000 # for laughs, watch a robot behave beyond when it was evolved for.
+    fit = pop.play(idx=df.loc[0, 'pop_idx']) # play the fittest individual from among those with the highest schedule temp
+#     fit = pop.play() # play fittest individual
+#     fit = pop.play(pop.fits.argmin()) # play the least fit individual
+#     fit = pop.play(13) # play arbitrary individual by id
+    print('play fitness:', fit)
     
 def save_model(filename, model):
     print('Saving model to', filename)
@@ -677,91 +678,96 @@ def analyze(filename, **kwargs):
     if filename is None:
         filename = 'population.pkl'
         
-    model = load_model(filename)
-    hp = model['hp']
-    pop = model['pop']
+    ns_path = 'experiments/exp_20190505_144957_population.pkl' # no scaffolding
+    es_path = 'experiments/exp_20190505_024129_population.pkl' # evolved scaffolding
     
-    exp_id = hp['exp_id']
-    if exp_id in ['exp_20190505_024155', 'exp_20190505_144957']:
-        exp_kind = 'ns' # not scaffolded
-    elif exp_id in ['exp_20190505_024129']:
-        exp_kind = 'es' # evolved scaffolding
-    elif exp_id in ['']:
-        exp_kind = 'ss' # strict scaffolding
-                  
-    fits = np.zeros((hp['num_gens']+1, pop.pop_size))
-    gens = np.arange(hp['num_gens']+1)
-    seen_gens = set()
-    for story in pop.history:
-        gen = story['gen']
-        if gen > 0 and gen not in seen_gens:
-            seen_gens.add(gen)
-            # propagate fitnesses to next generation
-            fits[gen, :] = fits[gen - 1, :]
-            
-        if 'better_idx' in story:
-            idx = story['better_idx']
-            # update fitnesses
-#             print(story['better_fits'])
-            fits[gen, idx] = story['better_fits']
-#         gens.setdefault(gen, {})
+    ns_model = load_model(ns_path)
+    es_model = load_model(es_path)
+    
+    es_hp = es_model['hp']
+    es_pop = es_model['pop']
+    ns_hp = ns_model['hp']
+    ns_pop = ns_model['pop']
+    
+    for hp, pop in [(es_hp, es_pop), (ns_hp, ns_pop)]:
+        fits = np.zeros((hp['num_gens']+1, pop.pop_size))
+        gens = np.arange(hp['num_gens']+1)
+        seen_gens = set()
+        for story in pop.history:
+            gen = story['gen']
+            if gen > 0 and gen not in seen_gens:
+                seen_gens.add(gen)
+                # propagate fitnesses to next generation
+                fits[gen, :] = fits[gen - 1, :]
 
-    mean_init_fit = fits[0].mean()
-    mean_fit = fits[-1].mean()
-    
-    # sorted by schedule temp and then fitness
-    temp_fit_df = (pd.DataFrame({'temp_schedule': pop.temp_schedule[pop.temps_idx], 
-                        'fits': pop.fits, 
-                        'ages': pop.ages,
-                        'pop_idx': pop.pop_idx})
-          .sort_values(['temp_schedule', 'fits'], kind='mergesort', ascending=False).reset_index(drop=True))
-    print('top ten', temp_fit_df[:10])
-    
-    
-    # plot fitness history of all genomes
-    plot_fitness_history(gens, fits, title='Fitness Evolution of Genomes')
-    
-    # plot fitness distribution of population
-#     sns.kdeplot(fits[-1], shade=True, cut=0)
-#     sns.rugplot(fits[-1])
-    sns.distplot(fits[-1], rug=True)
-    plt.title('Population Fitness Distribution')
-    plt.xlabel('Fitness')
-    plt.ylabel('Genome Count')
-    plt.axvline(0.7, color='r', linestyle='dashed', linewidth=1, label='fitness threshold')
-    plt.show()
+            if 'better_idx' in story:
+                idx = story['better_idx']
+                # update fitnesses
+    #             print(story['better_fits'])
+                fits[gen, idx] = story['better_fits']
+    #         gens.setdefault(gen, {})
 
-    # plot fitness history of top-ten genomes (temp + fit)
-    top_10_idx = temp_fit_df[:10]['pop_idx']
-    print('top_10_idx', top_10_idx)
-    plot_fitness_history(gens, fits[:, top_10_idx], 
-                         title='Fitness Evolution of Top Ten Genomes', 
-                         mean_init_fit=mean_init_fit,
-                         mean_fit=mean_fit,
-                        )
-    
-    if exp_kind in ['es', 'ss']:
-        # genomes with the max scaffolding temp
+        mean_init_fit = fits[0].mean()
+        mean_fit = fits[-1].mean()
+
+        # sorted by schedule temp and then fitness
+        temp_fit_df = (pd.DataFrame({'temp_schedule': pop.temp_schedule[pop.temps_idx], 
+                            'fits': pop.fits, 
+                            'ages': pop.ages,
+                            'pop_idx': pop.pop_idx})
+              .sort_values(['temp_schedule', 'fits'], kind='mergesort', ascending=False).reset_index(drop=True))
+        print('top ten', temp_fit_df[:10])
+
+
+        # plot fitness history of all genomes
+        plot_fitness_history(gens, fits, title='Fitness Evolution of Genomes')
+        plot_fitness_distribution(fits, 0.7, title='Population Fitness Distribution')
+
+        # plot fitness history of top-ten genomes (temp + fit)
+        top_10_idx = temp_fit_df[:10]['pop_idx']
+        print('top_10_idx', top_10_idx)
+        plot_fitness_history(gens, fits[:, top_10_idx], 
+                             title='Fitness Evolution of Top Ten Genomes', 
+                             mean_init_fit=mean_init_fit,
+                             mean_fit=mean_fit,
+                            )
+
+        # plot fitness history of max temp genomes
         max_temp = pop.temp_schedule[pop.temps_idx.max()]
         max_temp_idx = pop.pop_idx[pop.temps_idx == pop.temps_idx.max()]
-        # plot fitness history of max temp genomes
         plot_fitness_history(gens, fits[:, max_temp_idx], 
                              title=f'Fitness Evolution of Best ({max_temp:.2}) Temperature Genomes', 
                              mean_init_fit=mean_init_fit,
                              mean_fit=mean_fit,
                             )
-    
-        # plot counts of temps_idx, to see how the population as a whole progressed
-        temps_counts = np.bincount(pop.temps_idx, minlength=len(pop.temp_schedule))
-        temps_props = temps_counts / temps_counts.sum() # proportion of population
-        print('temps_counts', temps_counts)
-        plt.bar(np.arange(len(temps_counts)), temps_props, tick_label=pop.temp_schedule)
-        plt.title('Population Distribution by Scaffolding Temperature')
-        plt.ylabel('Population Proportion')
-        plt.title('Scaffolding Temperature')
-        plt.ylim(0, 1.)
-        plt.show()
 
+        # plot counts of temps_idx, to see how the population as a whole progressed
+        plot_temp_schedule_distribution(pop, title='Population Distribution by Scaffolding Temperature')
+
+
+def plot_temp_schedule_distribution(pop, title='Population Distribution by Scaffolding Temperature'):
+    # plot counts of temps_idx, to see how the population as a whole progressed
+    temps_counts = np.bincount(pop.temps_idx, minlength=len(pop.temp_schedule))
+    temps_props = temps_counts / temps_counts.sum() # proportion of population
+    print('temps_counts', temps_counts)
+    plt.bar(np.arange(len(temps_counts)), temps_props, tick_label=pop.temp_schedule)
+    plt.title(title)
+    plt.ylabel('Population Proportion')
+    plt.title('Scaffolding Temperature')
+    plt.ylim(0, 1.)
+    plt.show()
+
+            
+def plot_fitness_distribution(fits, fit_thresh, title='Population Fitness Distribution'):
+    # plot fitness distribution of population
+    sns.distplot(fits[-1], rug=True)
+    plt.title(title)
+    plt.xlabel('Fitness')
+    plt.ylabel('Genome Count')
+    plt.axvline(fit_thresh, color='r', linestyle='dashed', linewidth=1, label='fitness threshold')
+    plt.show()
+
+    
 def plot_fitness_history(gens, fits, title='Evolution of Genome Fitness', 
                          mean_init_fit=None, mean_fit=None):
     for i in range(fits.shape[1]):
