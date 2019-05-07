@@ -524,9 +524,9 @@ def make_hyperparameters():
         L=L, # leg length
         R=L / 5, # leg radius
         S=L / 2, # body radius
-        num_legs=5,
-        hidden_layer_size=3,
-        num_hidden_layers=0, # number of hidden layers
+        num_legs=20,
+        hidden_layer_size=2,
+        num_hidden_layers=1, # number of hidden layers
         use_proprio=True,
         use_vestib=True,
         front_angle=np.pi/2, # pi/2 = face the y-direction
@@ -552,7 +552,7 @@ def make_hyperparameters():
         sigma=0.1,
 #         eval_time=200, # number of timesteps
         eval_time=2000, # number of timesteps
-        pop_size=128, # population size
+        pop_size=32, # population size
 #         pop_size=4, # population size
         max_parallel=8, # max num sims to run simultaneously
         num_gens=1000, # number of generations
@@ -653,12 +653,14 @@ def play(filename=None, play_paused=False):
           .sort_values(['temp_schedule', 'fits'], kind='mergesort', ascending=False).reset_index(drop=True))
     print(df)
     
-    pop.genomes[:, 0] = pop.temp_schedule[-1] # watch robots play at max temp
+#     pop.genomes[:, 0] = pop.temp_schedule[-1] # watch robots play at max temp
 #     fit = pop.eval_time = 4000 # for laughs, watch a robot behave beyond when it was evolved for.
-    fit = pop.play(idx=df.loc[0, 'pop_idx']) # play the fittest individual from among those with the highest schedule temp
+#     fit = pop.play(idx=df.loc[0, 'pop_idx']) # play the fittest individual from among those with the highest schedule temp
 #     fit = pop.play() # play fittest individual
 #     fit = pop.play(pop.fits.argmin()) # play the least fit individual
 #     fit = pop.play(13) # play arbitrary individual by id
+
+    fit = pop.evaluate(first_genomes(pop)[[0]], play_blind=False, play_paused=True)
     print('play fitness:', fit)
     
 def save_model(filename, model):
@@ -674,42 +676,62 @@ def load_model(filename):
         
     return model
 
+
+def first_genomes(pop):
+    for story in pop.history:
+        gen = story['gen']
+        if 'better_idx' in story:
+            idx = story['better_idx']
+            genomes = story['better_genomes']
+            print('gen', gen)
+            return genomes
+
+            
 def analyze(filename, **kwargs):
     if filename is None:
         filename = 'population.pkl'
         
     ns_path = 'experiments/exp_20190505_144957_population.pkl' # no scaffolding
     es_path = 'experiments/exp_20190505_024129_population.pkl' # evolved scaffolding
-    
+    ss_path = 'experiments/exp_20190506_081723_population.pkl' # static scaffolding
     ns_model = load_model(ns_path)
     es_model = load_model(es_path)
+    ss_model = load_model(ss_path)
     
     es_hp = es_model['hp']
     es_pop = es_model['pop']
     ns_hp = ns_model['hp']
     ns_pop = ns_model['pop']
+    ss_hp = ss_model['hp']
+    ss_pop = ss_model['pop']
     
-    for hp, pop in [(es_hp, es_pop), (ns_hp, ns_pop)]:
+    for name, hp, pop in [('Static-Scaffolding', ss_hp, ss_pop), ('Evolved-Scaffolding', es_hp, es_pop), ('No-Scaffolding', ns_hp, ns_pop)]:
         fits = np.zeros((hp['num_gens']+1, pop.pop_size))
         gens = np.arange(hp['num_gens']+1)
+        temps = np.zeros((hp['num_gens']+1, pop.pop_size))
         seen_gens = set()
         for story in pop.history:
             gen = story['gen']
+            # print(gen, story)
             if gen > 0 and gen not in seen_gens:
                 seen_gens.add(gen)
                 # propagate fitnesses to next generation
                 fits[gen, :] = fits[gen - 1, :]
+                temps[gen, :] = temps[gen - 1, :]
 
             if 'better_idx' in story:
                 idx = story['better_idx']
+                genomes = story['better_genomes']
                 # update fitnesses
-    #             print(story['better_fits'])
                 fits[gen, idx] = story['better_fits']
-    #         gens.setdefault(gen, {})
+                # update temps
+                temps[gen, idx] = genomes[:, 0]
 
         mean_init_fit = fits[0].mean()
         mean_fit = fits[-1].mean()
-
+        fit_thresh = hp['fit_thresh']
+        prefix_name = "_".join(name.lower().split())
+        
         # sorted by schedule temp and then fitness
         temp_fit_df = (pd.DataFrame({'temp_schedule': pop.temp_schedule[pop.temps_idx], 
                             'fits': pop.fits, 
@@ -720,69 +742,141 @@ def analyze(filename, **kwargs):
 
 
         # plot fitness history of all genomes
-        plot_fitness_history(gens, fits, title='Fitness Evolution of Genomes')
-        plot_fitness_distribution(fits, 0.7, title='Population Fitness Distribution')
+        plot_fitness_history(gens, fits, title=f'Fitness of {name} Population',
+                             mean_init_fit=mean_init_fit,
+                             mean_fit=mean_fit,
+                             fit_thresh=fit_thresh,
+                             prefix=prefix_name + '_all')
+        plot_temp_history(gens, temps, 
+                          temp_schedule=pop.temp_schedule, 
+                          title=f'Temperature of {name} Population',
+                          prefix=prefix_name + '_all')
+        plot_fitness_distribution(fits, fit_thresh, 
+                                  mean_init_fit=mean_init_fit,
+                                  mean_fit=mean_fit,
+                                  title=f'{name} Population Fitness Distribution', prefix=prefix_name + '_all')
+        plot_temp_distribution(temps, pop.temp_schedule, title=f'{name} Population Temperature Distribution', prefix=prefix_name + '_all')
 
         # plot fitness history of top-ten genomes (temp + fit)
         top_10_idx = temp_fit_df[:10]['pop_idx']
         print('top_10_idx', top_10_idx)
         plot_fitness_history(gens, fits[:, top_10_idx], 
-                             title='Fitness Evolution of Top Ten Genomes', 
+                             title=f'Fitness of Top Ten {name} Genomes', 
                              mean_init_fit=mean_init_fit,
                              mean_fit=mean_fit,
-                            )
+                             fit_thresh=fit_thresh,
+                             prefix=prefix_name + '_top_ten')
+        plot_temp_history(gens, temps[:, top_10_idx], 
+                          temp_schedule=pop.temp_schedule, 
+                          title=f'Temperature of Top Ten {name} Genomes',
+                          prefix=prefix_name + '_top_ten')
 
         # plot fitness history of max temp genomes
-        max_temp = pop.temp_schedule[pop.temps_idx.max()]
+        max_temp = float(pop.temp_schedule[pop.temps_idx.max()])
         max_temp_idx = pop.pop_idx[pop.temps_idx == pop.temps_idx.max()]
         plot_fitness_history(gens, fits[:, max_temp_idx], 
-                             title=f'Fitness Evolution of Best ({max_temp:.2}) Temperature Genomes', 
+                             title=f'Fitness of the Hottest (t={max_temp:.2}) {name} Genomes', 
                              mean_init_fit=mean_init_fit,
                              mean_fit=mean_fit,
-                            )
+                             fit_thresh=fit_thresh,
+                             prefix=prefix_name + '_max_temp')
+        plot_temp_history(gens, temps[:, max_temp_idx], 
+                          temp_schedule=pop.temp_schedule, 
+                          title=f'Temperature of the Hottest (t={max_temp:.2}) {name} Genomes',
+                          prefix=prefix_name + '_max_temp')
 
         # plot counts of temps_idx, to see how the population as a whole progressed
-        plot_temp_schedule_distribution(pop, title='Population Distribution by Scaffolding Temperature')
+        plot_temp_schedule_distribution(pop, title=f'{name} Population Distribution by Scaffolding Temperature', prefix=prefix_name + '_all')
 
 
-def plot_temp_schedule_distribution(pop, title='Population Distribution by Scaffolding Temperature'):
+def plot_temp_schedule_distribution(pop, title='Population Distribution by Scaffolding Temperature', prefix=None):
     # plot counts of temps_idx, to see how the population as a whole progressed
     temps_counts = np.bincount(pop.temps_idx, minlength=len(pop.temp_schedule))
     temps_props = temps_counts / temps_counts.sum() # proportion of population
     print('temps_counts', temps_counts)
     plt.bar(np.arange(len(temps_counts)), temps_props, tick_label=pop.temp_schedule)
     plt.title(title)
-    plt.ylabel('Population Proportion')
-    plt.title('Scaffolding Temperature')
+    plt.ylabel('population proportion')
+    plt.xlabel('scaffolding temperature')
     plt.ylim(0, 1.)
+    if prefix is not None:
+        plt.savefig(f'figures/{prefix}_temp_schedule_distribution_plot.png')
     plt.show()
 
             
-def plot_fitness_distribution(fits, fit_thresh, title='Population Fitness Distribution'):
+def plot_fitness_distribution(fits, fit_thresh=None, 
+                              mean_init_fit=None,
+                              mean_fit=None,
+                              title='Population Fitness Distribution', prefix=None):
     # plot fitness distribution of population
     sns.distplot(fits[-1], rug=True)
     plt.title(title)
-    plt.xlabel('Fitness')
-    plt.ylabel('Genome Count')
-    plt.axvline(fit_thresh, color='r', linestyle='dashed', linewidth=1, label='fitness threshold')
+    plt.xlabel('fitness')
+#     plt.ylabel('Genome Count')
+    if mean_init_fit is not None:
+        plt.axvline(mean_init_fit, color='r', linestyle='dashed', linewidth=1, label='mean initial fitness')
+    if mean_fit is not None:
+        plt.axvline(mean_fit, color='k', linestyle='dashed', linewidth=1, label='mean fitness')
+    if fit_thresh is not None:
+        plt.axvline(fit_thresh, color='g', linestyle='dashed', linewidth=1, label='fitness threshold')
+    plt.legend()
+    if prefix is not None:
+        plt.savefig(f'figures/{prefix}_fitness_distribution_plot.png')
     plt.show()
 
     
+def plot_temp_distribution(temps, temp_schedule, title='Population Temperature Distribution', prefix=None):
+    # plot fitness distribution of population
+    sns.distplot(temps[-1], rug=True)
+    plt.title(title)
+    plt.xlabel('temperature')
+#     plt.ylabel('Genome Count')
+    for temp in temp_schedule:
+        temp = float(temp)
+        line = plt.axvline(temp, color='k', linestyle='dashed', linewidth=1)
+    
+    plt.legend([line], ['schedule temperatures'])
+    if prefix is not None:
+        plt.savefig(f'figures/{prefix}_temp_distribution_plot.png')
+    plt.show()
+
+    
+def plot_temp_history(gens, temps, temp_schedule=None, title='Evolution of Genome Temperature', prefix=None):
+    for i in range(temps.shape[1]):
+        plt.plot(gens, temps[:, i])
+        
+    if temp_schedule is not None:
+        for temp in temp_schedule:
+            temp = float(temp)
+            line = plt.axhline(temp, color='k', linestyle='dashed', linewidth=1)
+        
+    plt.title(title)
+    plt.xlabel('generation')
+    plt.ylabel('temperature')
+    plt.legend([line], ['schedule temperatures'], loc=2)
+    if prefix is not None:
+        plt.savefig(f'figures/{prefix}_temp_history_plot.png')
+    plt.show()
+    
+    
 def plot_fitness_history(gens, fits, title='Evolution of Genome Fitness', 
-                         mean_init_fit=None, mean_fit=None):
+                         mean_init_fit=None, mean_fit=None, fit_thresh=None, prefix=None):
     for i in range(fits.shape[1]):
         plt.plot(gens, fits[:, i])
         
-    plt.axhline(0.7, color='r', linestyle='dashed', linewidth=1, label='fitness threshold')
+    if fit_thresh is not None:
+        plt.axhline(fit_thresh, color='g', linestyle='dashed', linewidth=1, label='fitness threshold')
     if mean_init_fit is not None:
-        plt.axhline(mean_init_fit, color='k', linestyle='dashed', linewidth=1, label='mean initial fitness')
+        plt.axhline(mean_init_fit, color='r', linestyle='dashed', linewidth=1, label='mean initial fitness')
     if mean_fit is not None:
-        plt.axhline(mean_fit, color='b', linestyle='dashed', linewidth=1, label='mean fitness')
+        plt.axhline(mean_fit, color='k', linestyle='dashed', linewidth=1, label='mean fitness')
         
     plt.title(title)
     plt.xlabel('generation')
     plt.ylabel('fitness')
     plt.legend()
+    if prefix is not None:
+        plt.savefig(f'figures/{prefix}_fitness_history_plot.png')
     plt.show()
         
 #         print('gen', story['gen'], sorted(story.keys()))
